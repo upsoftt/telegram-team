@@ -1,0 +1,69 @@
+From f96785466c03399016454d945a2786168c0b541b Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 15:13:01 +0300
+Subject: [PATCH] =?UTF-8?q?TgTeam:=20=D1=81=D0=B2=D0=BE=D1=8F=20=D1=81?=
+ =?UTF-8?q?=D1=85=D0=B5=D0=BC=D0=B0=20=D1=81=D1=81=D1=8B=D0=BB=D0=BE=D0=BA?=
+ =?UTF-8?q?=20=D0=BD=D0=B0=D0=BA=D0=BE=D0=BD=D0=B5=D1=86=20=D0=BF=D0=BE?=
+ =?UTF-8?q?=D0=BF=D0=B0=D0=B4=D0=B0=D0=B5=D1=82=20=D0=B2=20=D0=BF=D1=80?=
+ =?UTF-8?q?=D0=B8=D0=BB=D0=BE=D0=B6=D0=B5=D0=BD=D0=B8=D0=B5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Список схем задаётся в Telegram/BUILD, а Telegram-iOS/Info.plist в сборке
+Bazel не участвует. Поэтому app_specific_url_scheme из конфигурации доходил
+только до кода, который ссылку разбирает, — система же приложению её не
+отдавала, и tgteam:// не открывала клиент вовсе.
+---
+ Telegram/BUILD | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/Telegram/BUILD b/Telegram/BUILD
+index 4af26c4e5c..4c8787f048 100644
+--- a/Telegram/BUILD
++++ b/Telegram/BUILD
+@@ -52,6 +52,7 @@ load(
+     "telegram_team_id",
+     "telegram_enable_icloud",
+     "telegram_enable_siri",
++    "telegram_app_specific_url_scheme",
+ )
+ 
+ load("@build_bazel_rules_apple//apple:resources.bzl",
+@@ -406,6 +407,18 @@ plist_fragment(
+     defaults = {"buildNumber": "1"},
+ )
+ 
++# TgTeam: к схемам апстрима добавлена своя. Только в ней есть параметр account,
++# и по ней LeadSearcher открывает нужный чат нужным аккаунтом. Задать её одной
++# конфигурацией сборки нельзя: список схем живёт здесь, а не в Info.plist.
++# Пустое значение и совпадение с уже перечисленной схемой пропускаются: у всех
++# апстримных конфигураций app_specific_url_scheme = "tg", и без этой проверки
++# сборка по ним получила бы в списке схем дубль или пустую строку.
++tgteam_url_scheme_entry = (
++    ""
++    if telegram_app_specific_url_scheme in ["", "tg", "telegram", "tonsite"]
++    else "\n                <string>%s</string>" % telegram_app_specific_url_scheme
++)
++
+ plist_fragment(
+     name = "UrlTypesInfoPlist",
+     extension = "plist",
+@@ -431,12 +444,13 @@ plist_fragment(
+             <key>CFBundleURLSchemes</key>
+             <array>
+                 <string>tg</string>
+-                <string>tonsite</string>
++                <string>tonsite</string>{tgteam_url_scheme_entry}
+             </array>
+         </dict>
+     </array>
+     """.format(
+         telegram_bundle_id = telegram_bundle_id,
++        tgteam_url_scheme_entry = tgteam_url_scheme_entry,
+     )
+ )
+ 
+-- 
+2.50.1 (Apple Git-155)
+

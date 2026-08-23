@@ -1,0 +1,83 @@
+From 1e5e5b0d5c8bf07ed7659f4f2f3e4b6cf4a4de40 Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 15:28:17 +0300
+Subject: =?UTF-8?q?LeadSearcher:=20=D0=BE=D0=B1=D1=8B=D1=87=D0=BD=D1=8B?=
+ =?UTF-8?q?=D0=B5=20=D1=81=D1=81=D1=8B=D0=BB=D0=BA=D0=B8=20Telegram=20?=
+ =?UTF-8?q?=D0=BE=D1=82=D0=BA=D1=80=D1=8B=D0=B2=D0=B0=D0=B5=D1=82=20=D1=8D?=
+ =?UTF-8?q?=D1=82=D0=B0=20=D1=81=D0=B1=D0=BE=D1=80=D0=BA=D0=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+За клиентом закрепляются tg:// и tonsite:// вдобавок к своей tgteam://:
+раз владелец пользуется этой сборкой, ссылки из браузера должны попадать
+в неё, а не поднимать закрытый личный клиент.
+
+Регистрация обновляется на каждом запуске, а не только при смене версии:
+личный Telegram записывает tg:// на себя при каждом своём обновлении и
+молча забирал бы ссылки обратно.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ Telegram/SourceFiles/core/application.cpp | 37 ++++++++++++++---------
+ 1 file changed, 23 insertions(+), 14 deletions(-)
+
+diff --git a/Telegram/SourceFiles/core/application.cpp b/Telegram/SourceFiles/core/application.cpp
+index f13295c50c..9bba2fc7d4 100644
+--- a/Telegram/SourceFiles/core/application.cpp
++++ b/Telegram/SourceFiles/core/application.cpp
+@@ -321,8 +321,12 @@ void Application::run() {
+ 
+ 	refreshGlobalProxy(); // Depends on app settings being read.
+ 
++	// LeadSearcher: личный Telegram забирает tg:// себе при каждом своём
++	// обновлении, поэтому схемы перерегистрируются на каждом запуске, а не
++	// только при смене версии, — иначе ссылки однажды молча уедут к нему.
++	autoRegisterUrlScheme();
++
+ 	if (const auto old = Local::oldSettingsVersion(); old < AppVersion) {
+-		autoRegisterUrlScheme();
+ 		Platform::NewVersionLaunched(old);
+ 	}
+ 
+@@ -2094,19 +2098,24 @@ void Application::RegisterUrlScheme() {
+ 		? u"-workdir \"%1\""_q.arg(cWorkingDir())
+ 		: QString();
+ 
+-	// LeadSearcher: схемы tg:// и tonsite:// остаются за личным Telegram.
+-	// Забрав их себе, эта сборка перехватывала бы вообще все ссылки системы,
+-	// причём заново при каждом запуске.
+-	base::Platform::RegisterUrlScheme(base::Platform::UrlSchemeDescriptor{
+-		.executable = Platform::ExecutablePathForShortcuts(),
+-		.arguments = arguments,
+-		.protocol = u"tgteam"_q,
+-		.protocolName = u"Telegram Team Link"_q,
+-		.shortAppName = u"tdesktopteam"_q,
+-		.longAppName = QCoreApplication::applicationName(),
+-		.displayAppName = AppName.utf16(),
+-		.displayAppDescription = AppName.utf16(),
+-	});
++	// LeadSearcher: обычные ссылки Telegram тоже открывает эта сборка —
++	// владелец пользуется ею, а не личным клиентом. Своя схема tgteam://
++	// остаётся: только в ней есть параметр account.
++	const auto scheme = [&](const QString &protocol, const QString &name) {
++		base::Platform::RegisterUrlScheme(base::Platform::UrlSchemeDescriptor{
++			.executable = Platform::ExecutablePathForShortcuts(),
++			.arguments = arguments,
++			.protocol = protocol,
++			.protocolName = name,
++			.shortAppName = u"tdesktopteam"_q,
++			.longAppName = QCoreApplication::applicationName(),
++			.displayAppName = AppName.utf16(),
++			.displayAppDescription = AppName.utf16(),
++		});
++	};
++	scheme(u"tgteam"_q, u"Telegram Team Link"_q);
++	scheme(u"tg"_q, u"Telegram Link"_q);
++	scheme(u"tonsite"_q, u"TonSite Link"_q);
+ }
+ 
+ bool IsAppLaunched() {
+-- 
+2.52.0.windows.1
+

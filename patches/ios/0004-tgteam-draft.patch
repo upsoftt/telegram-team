@@ -1,0 +1,212 @@
+From 6f05af496d5e52157e19b1b6fc6ad3ad90b2976f Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 21:55:47 +0300
+Subject: [PATCH] =?UTF-8?q?TgTeam:=20=D1=87=D0=B5=D1=80=D0=BD=D0=BE=D0=B2?=
+ =?UTF-8?q?=D0=B8=D0=BA=20=D0=BE=D1=82=D0=B2=D0=B5=D1=82=D0=B0=20=D0=B4?=
+ =?UTF-8?q?=D0=BE=D0=B5=D0=B7=D0=B6=D0=B0=D0=B5=D1=82=20=D0=B4=D0=BE=20?=
+ =?UTF-8?q?=D0=BF=D0=BE=D0=BB=D1=8F=20=D0=B2=D0=B2=D0=BE=D0=B4=D0=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Кнопка «Открыть чат с текстом» открывала нужный чат, а поле ввода оставалось
+пустым. Мешали три места подряд.
+
+Ссылка чата без публичного имени теряла текст ещё при подготовке: privatepost
+собирался в короткий адрес без параметров. Разбор ссылки нёс либо номер
+сообщения, либо текст — для ссылки с обоими текст пропадал; заведены отдельные
+случаи, которые несут и то, и другое и открывают чат ответом на нужную реплику.
+Донесённый текст всё равно выбрасывался условием «подставлять только в личных
+чатах» — то же ограничение, что снято на компьютере, и пришло оно из ссылок
+вида t.me/user?text=.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ submodules/TelegramUI/Sources/OpenUrl.swift   | 20 ++++--
+ .../UrlHandling/Sources/UrlHandling.swift     | 65 ++++++++++++++++++-
+ 2 files changed, 79 insertions(+), 6 deletions(-)
+
+diff --git a/submodules/TelegramUI/Sources/OpenUrl.swift b/submodules/TelegramUI/Sources/OpenUrl.swift
+index 6c964bad99..5b9561fc20 100644
+--- a/submodules/TelegramUI/Sources/OpenUrl.swift
++++ b/submodules/TelegramUI/Sources/OpenUrl.swift
+@@ -177,7 +177,12 @@ private func makeResolvedUrlHandler(
+                     case let .chat(textInputState, subject, peekData):
+                         context.sharedContext.applicationBindings.dismissNativeController()
+                         if let navigationController {
+-                            context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), subject: subject, updateTextInputState: !peer.id.isGroupOrChannel ? textInputState : nil, peekData: peekData))
++                            // TgTeam: черновик из ссылки ставится и в группах.
++                            // Ограничение «только личные чаты» осталось от
++                            // ссылок вида t.me/user?text=, а сигналы приходят из
++                            // обсуждений — там подставить ответ нужнее всего.
++                            // Ровно так же снято ограничение на компьютере.
++                            context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), subject: subject, updateTextInputState: textInputState, peekData: peekData))
+                         }
+                     case let .withBotStartPayload(payload):
+                         context.sharedContext.applicationBindings.dismissNativeController()
+@@ -601,13 +606,20 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
+                     let channelId = params["channel"].flatMap(Int64.init)
+                     let postId = params["post"].flatMap(Int32.init)
+                     let threadId = params["thread"].flatMap(Int64.init)
+-                    
++                    // TgTeam: черновик ответа из карточки сигнала. Ссылка чата
++                    // без публичного имени приходит сюда, и текст терялся уже
++                    // на этом шаге — до разбора ссылки он просто не доезжал.
++                    var privateQueryItems: [URLQueryItem] = []
++                    if let draftText = params["text"], !draftText.isEmpty {
++                        privateQueryItems.append(URLQueryItem(name: "text", value: draftText))
++                    }
++
+                     if let channelId {
+                         if let postId {
+                             if let threadId {
+-                                convertedUrl = makeTelegramUrl("/c/\(channelId)/\(threadId)/\(postId)")
++                                convertedUrl = makeTelegramUrl("/c/\(channelId)/\(threadId)/\(postId)", queryItems: privateQueryItems)
+                             } else {
+-                                convertedUrl = makeTelegramUrl("/c/\(channelId)/\(postId)")
++                                convertedUrl = makeTelegramUrl("/c/\(channelId)/\(postId)", queryItems: privateQueryItems)
+                             }
+                         } else if let threadId {
+                             convertedUrl = makeTelegramUrl("/c/\(channelId)/\(threadId)")
+diff --git a/submodules/UrlHandling/Sources/UrlHandling.swift b/submodules/UrlHandling/Sources/UrlHandling.swift
+index 5a92356531..f315e3ad6b 100644
+--- a/submodules/UrlHandling/Sources/UrlHandling.swift
++++ b/submodules/UrlHandling/Sources/UrlHandling.swift
+@@ -102,6 +102,8 @@ public enum ParsedInternalPeerUrlParameter {
+     case attachBotStart(String, String?)
+     case gameStart(String)
+     case channelMessage(Int32, Double?)
++    // TgTeam: сообщение вместе с черновиком ответа — см. privateMessageDraft.
++    case channelMessageDraft(Int32, String)
+     case replyThread(Int32, Int32)
+     case voiceChat(String?)
+     case appStart(String, String?, ResolvedStartAppMode)
+@@ -130,6 +132,10 @@ public enum ParsedInternalUrl {
+     case peer(UrlPeerReference, ParsedInternalPeerUrlParameter?)
+     case peerId(EnginePeer.Id)
+     case privateMessage(messageId: EngineMessage.Id, threadId: Int32?, subject: UrlMessageSubject?)
++    // TgTeam: то же сообщение, но с черновиком ответа из ссылки. Отдельный
++    // случай нужен потому, что обычный разбор несёт либо номер сообщения, либо
++    // текст — а карточке сигнала нужно и то, и другое сразу.
++    case privateMessageDraft(messageId: EngineMessage.Id, threadId: Int32?, text: String)
+     case stickerPack(name: String, type: StickerPackUrlType)
+     case invoice(String)
+     case join(String)
+@@ -648,6 +654,10 @@ public func parseInternalUrl(sharedContext: SharedAccountContext, context: Accou
+                     if let channelId = Int64(pathComponents[1]), let messageId = Int32(pathComponents[2]), channelId > 0 {
+                         var threadId: Int32?
+                         var subject: ParsedInternalUrl.UrlMessageSubject?
++                        // TgTeam: черновик ответа из ссылки карточки сигнала.
++                        // Чаты без публичного имени приходят именно сюда, и
++                        // раньше текст здесь пропадал вместе со ссылкой.
++                        var draftText: String?
+                         if let queryItems = components.queryItems {
+                             for queryItem in queryItems {
+                                 if let value = queryItem.value {
+@@ -666,11 +676,19 @@ public func parseInternalUrl(sharedContext: SharedAccountContext, context: Accou
+                                         }
+                                     } else if queryItem.name == "option" {
+                                         subject = .pollOption(value)
++                                    } else if queryItem.name == "text" {
++                                        if !value.isEmpty {
++                                            draftText = value
++                                        }
+                                     }
+                                 }
+                             }
+                         }
+-                        return .privateMessage(messageId: EngineMessage.Id(peerId: EnginePeer.Id(namespace: Namespaces.Peer.CloudChannel, id: EnginePeer.Id.Id._internalFromInt64Value(channelId)), namespace: Namespaces.Message.Cloud, id: messageId), threadId: threadId, subject: subject)
++                        let privateMessageId = EngineMessage.Id(peerId: EnginePeer.Id(namespace: Namespaces.Peer.CloudChannel, id: EnginePeer.Id.Id._internalFromInt64Value(channelId)), namespace: Namespaces.Message.Cloud, id: messageId)
++                        if let draftText, subject == nil {
++                            return .privateMessageDraft(messageId: privateMessageId, threadId: threadId, text: draftText)
++                        }
++                        return .privateMessage(messageId: privateMessageId, threadId: threadId, subject: subject)
+                     } else {
+                         return nil
+                     }
+@@ -754,6 +772,8 @@ public func parseInternalUrl(sharedContext: SharedAccountContext, context: Accou
+                     var threadId: Int32?
+                     var commentId: Int32?
+                     var timecode: Double?
++                    // TgTeam: черновик ответа из ссылки карточки сигнала.
++                    var draftText: String?
+                     if let queryItems = components.queryItems {
+                         for queryItem in queryItems {
+                             if let value = queryItem.value {
+@@ -770,17 +790,23 @@ public func parseInternalUrl(sharedContext: SharedAccountContext, context: Accou
+                                     if timestampValue != 0 {
+                                         timecode = Double(timestampValue)
+                                     }
++                                } else if queryItem.name == "text" {
++                                    if !value.isEmpty {
++                                        draftText = value
++                                    }
+                                 }
+                             }
+                         }
+                     }
+-                    
++
+                     if pathComponents.count >= 3, let subMessageId = Int32(pathComponents[2]) {
+                         return .peer(.name(peerName), .replyThread(value, subMessageId))
+                     } else if let threadId = threadId {
+                         return .peer(.name(peerName), .replyThread(threadId, value))
+                     } else if let commentId = commentId {
+                         return .peer(.name(peerName), .replyThread(value, commentId))
++                    } else if let draftText {
++                        return .peer(.name(peerName), .channelMessageDraft(value, draftText))
+                     } else {
+                         return .peer(.name(peerName), .channelMessage(value, timecode))
+                     }
+@@ -1013,6 +1039,17 @@ private func resolveInternalUrl(context: AccountContext, url: ParsedInternalUrl)
+                                 } else {
+                                     return .single(.result(.channelMessage(peer: peer._asPeer(), messageId: EngineMessage.Id(peerId: peer.id, namespace: Namespaces.Message.Cloud, id: id), timecode: timecode)))
+                                 }
++                            // TgTeam: сообщение с черновиком ответа. Чат
++                            // открывается на нужной реплике, ответ готовится к
++                            // ней же, а текст ложится в поле ввода — карточка
++                            // сигнала передаёт ровно это.
++                            case let .channelMessageDraft(id, draftText):
++                                let draftMessageId = EngineMessage.Id(peerId: peer.id, namespace: Namespaces.Message.Cloud, id: id)
++                                return .single(.result(.peer(peer._asPeer(), .chat(
++                                    textInputState: ChatTextInputState(inputText: NSAttributedString(string: draftText)),
++                                    subject: .message(id: .id(draftMessageId), highlight: ChatControllerSubject.MessageHighlight(quote: nil), timecode: nil, setupReply: true),
++                                    peekData: nil
++                                ))))
+                             case let .replyThread(id, replyId):
+                                 let replyThreadMessageId = EngineMessage.Id(peerId: peer.id, namespace: Namespaces.Message.Cloud, id: id)
+                             
+@@ -1111,6 +1148,30 @@ private func resolveInternalUrl(context: AccountContext, url: ParsedInternalUrl)
+                     return .single(.result(.peer(nil, .info(nil))))
+                 }
+             })
++        // TgTeam: то же, что privateMessage, но с черновиком ответа. Чат без
++        // публичного имени приходит именно сюда, и до этого разбора текст из
++        // ссылки терялся: чат открывался, поле ввода оставалось пустым.
++        case let .privateMessageDraft(messageId, _, draftText):
++            return context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: messageId.peerId))
++            |> mapToSignal { peer -> Signal<ResolveInternalUrlResult, NoError> in
++                let foundPeer: Signal<EnginePeer?, NoError>
++                if let peer = peer {
++                    foundPeer = .single(peer)
++                } else {
++                    foundPeer = context.engine.peers.findChannelById(channelId: messageId.peerId.id._internalGetInt64Value())
++                }
++                return .single(.progress) |> then(foundPeer
++                |> map { foundPeer -> ResolveInternalUrlResult in
++                    guard let foundPeer = foundPeer else {
++                        return .result(nil)
++                    }
++                    return .result(.peer(foundPeer._asPeer(), .chat(
++                        textInputState: ChatTextInputState(inputText: NSAttributedString(string: draftText)),
++                        subject: .message(id: .id(messageId), highlight: ChatControllerSubject.MessageHighlight(quote: nil), timecode: nil, setupReply: true),
++                        peekData: nil
++                    )))
++                })
++            }
+         case let .privateMessage(messageId, threadId, subject):
+             return context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: messageId.peerId))
+             |> mapToSignal { peer -> Signal<ResolveInternalUrlResult, NoError> in
+-- 
+2.50.1 (Apple Git-155)
+

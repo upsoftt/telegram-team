@@ -1,0 +1,15 @@
+{
+    "_комментарий": "Шаблон конфигурации сборки. Скопируйте в build-system/<своё имя>-configuration.json внутри исходников Telegram-iOS и заполните своими значениями. Ключ приложения (api_id и api_hash) берётся на my.telegram.org. Заполненный файл в репозиторий не кладите: в нём api_hash.",
+    "bundle_id": "com.example.myapp",
+    "api_id": "<ваш api_id>",
+    "api_hash": "<ваш api_hash>",
+    "team_id": "<номер команды разработчика Apple>",
+    "app_center_id": "0",
+    "is_internal_build": "true",
+    "is_appstore_build": "false",
+    "appstore_id": "0",
+    "app_specific_url_scheme": "myapp",
+    "premium_iap_product_id": "",
+    "enable_siri": false,
+    "enable_icloud": false
+}

@@ -1,0 +1,130 @@
+From f6222d2f7e0ac104ec3e073136bad695f6091aa1 Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Wed, 29 Jul 2026 14:46:16 +0300
+Subject: =?UTF-8?q?LeadSearcher:=20=D1=87=D0=B5=D1=80=D0=BD=D0=BE=D0=B2?=
+ =?UTF-8?q?=D0=B8=D0=BA=20=D0=BE=D1=82=D0=B2=D0=B5=D1=82=D0=B0=20=D0=B8?=
+ =?UTF-8?q?=D0=B7=20=D1=81=D1=81=D1=8B=D0=BB=D0=BA=D0=B8=20=D0=B2=20=D0=B3?=
+ =?UTF-8?q?=D1=80=D1=83=D0=BF=D0=BF=D0=B0=D1=85=20=D0=B8=20=D0=BE=D1=82?=
+ =?UTF-8?q?=D0=B2=D0=B5=D1=82=20=D0=BD=D0=B0=20=D0=BD=D1=83=D0=B6=D0=BD?=
+ =?UTF-8?q?=D0=BE=D0=B5=20=D1=81=D0=BE=D0=BE=D0=B1=D1=89=D0=B5=D0=BD=D0=B8?=
+ =?UTF-8?q?=D0=B5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Кнопка «Открыть чат с текстом» в карточке сигнала передаёт клиенту текст
+ответа и номер реплики, на которую отвечает владелец. Клиент открывал чат, но
+поле ввода оставалось пустым: черновик из ссылки ставился только в личных
+чатах (`peer->isUser()`), а сигналы приходят из обсуждений — там подставить
+ответ нужнее всего. Ограничение осталось от share-ссылок t.me/user?text=.
+
+Параметр reply_to ставит черновик ответом на конкретное сообщение: без него
+реплика уходит в конец чата, и собеседник не понимает, на что ему отвечают.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ Telegram/SourceFiles/core/local_url_handlers.cpp      |  3 +++
+ Telegram/SourceFiles/data/data_drafts.cpp             | 11 ++++++++++-
+ Telegram/SourceFiles/data/data_drafts.h               |  7 ++++++-
+ .../SourceFiles/window/window_session_controller.cpp  |  9 +++++++--
+ .../window/window_session_controller_link_info.h      |  2 ++
+ 5 files changed, 28 insertions(+), 4 deletions(-)
+
+diff --git a/Telegram/SourceFiles/core/local_url_handlers.cpp b/Telegram/SourceFiles/core/local_url_handlers.cpp
+index 2499a18779..e6ddb29686 100644
+--- a/Telegram/SourceFiles/core/local_url_handlers.cpp
++++ b/Telegram/SourceFiles/core/local_url_handlers.cpp
+@@ -715,6 +715,9 @@ bool ResolveUsernameOrPhone(
+ 			? ParseVideoTimestamp(videot)
+ 			: std::optional<TimeId>()),
+ 		.text = params.value(u"text"_q),
++		// LeadSearcher: карточка сигнала передаёт, на какое сообщение
++		// отвечает владелец, чтобы черновик встал ответом на него.
++		.draftReplyTo = MsgId(params.value(u"reply_to"_q).toInt()),
+ 		.repliesInfo = commentId
+ 			? Window::RepliesByLinkInfo{
+ 				Window::CommentId{ commentId }
+diff --git a/Telegram/SourceFiles/data/data_drafts.cpp b/Telegram/SourceFiles/data/data_drafts.cpp
+index 3a1a3da973..6a4f19bcf9 100644
+--- a/Telegram/SourceFiles/data/data_drafts.cpp
++++ b/Telegram/SourceFiles/data/data_drafts.cpp
+@@ -185,7 +185,10 @@ void ClearPeerCloudDraft(
+ 	history->applyCloudDraft(topicRootId, monoforumPeerId);
+ }
+ 
+-void SetChatLinkDraft(not_null<PeerData*> peer, TextWithEntities draft) {
++void SetChatLinkDraft(
++		not_null<PeerData*> peer,
++		TextWithEntities draft,
++		MsgId replyTo) {
+ 	static const auto kInlineStart = QRegularExpression("^@[a-zA-Z0-9_]");
+ 	if (kInlineStart.match(draft.text).hasMatch()) {
+ 		draft = TextWithEntities().append(' ').append(std::move(draft));
+@@ -206,6 +209,12 @@ void SetChatLinkDraft(not_null<PeerData*> peer, TextWithEntities draft) {
+ 	history->setLocalDraft(std::make_unique<Draft>(
+ 		textWithTags,
+ 		FullReplyTo{
++			// LeadSearcher: ответ встаёт на конкретное сообщение, если оно
++			// названо в ссылке. Без этого черновик уходит в конец чата, и
++			// собеседник не понимает, на что ему отвечают.
++			.messageId = (replyTo
++				? FullMsgId(peer->id, replyTo)
++				: FullMsgId()),
+ 			.topicRootId = topicRootId,
+ 			.monoforumPeerId = monoforumPeerId,
+ 		},
+diff --git a/Telegram/SourceFiles/data/data_drafts.h b/Telegram/SourceFiles/data/data_drafts.h
+index f610d7ab60..f840c93ed9 100644
+--- a/Telegram/SourceFiles/data/data_drafts.h
++++ b/Telegram/SourceFiles/data/data_drafts.h
+@@ -262,6 +262,11 @@ using HistoryDrafts = base::flat_map<DraftKey, std::unique_ptr<Draft>>;
+ [[nodiscard]] bool DraftIsNull(const Draft *draft);
+ [[nodiscard]] bool DraftsAreEqual(const Draft *a, const Draft *b);
+ 
+-void SetChatLinkDraft(not_null<PeerData*> peer, TextWithEntities draft);
++// LeadSearcher: replyTo позволяет открыть чат сразу ответом на нужное
++// сообщение — карточка сигнала знает, на какую реплику отвечает владелец.
++void SetChatLinkDraft(
++	not_null<PeerData*> peer,
++	TextWithEntities draft,
++	MsgId replyTo = MsgId());
+ 
+ } // namespace Data
+diff --git a/Telegram/SourceFiles/window/window_session_controller.cpp b/Telegram/SourceFiles/window/window_session_controller.cpp
+index 8119bd7cc6..c3cb5c88ea 100644
+--- a/Telegram/SourceFiles/window/window_session_controller.cpp
++++ b/Telegram/SourceFiles/window/window_session_controller.cpp
+@@ -837,10 +837,15 @@ void SessionNavigation::showPeerByLinkResolved(
+ 		} else {
+ 			const auto draft = info.text;
+ 			const auto historyInNewWindow = info.historyInNewWindow;
++			const auto draftReplyTo = info.draftReplyTo;
+ 			params.videoTimestamp = info.videoTimestamp;
+ 			crl::on_main(this, [=] {
+-				if (peer->isUser() && !draft.isEmpty()) {
+-					Data::SetChatLinkDraft(peer, { draft });
++				// LeadSearcher: черновик из ссылки ставится и в группах, а не
++				// только в личных чатах. Ограничение `isUser` осталось от
++				// share-ссылок t.me/user?text=, а сигналы приходят из
++				// обсуждений — там подставить ответ нужнее всего.
++				if (!draft.isEmpty()) {
++					Data::SetChatLinkDraft(peer, { draft }, draftReplyTo);
+ 				}
+ 				if (historyInNewWindow) {
+ 					const auto window
+diff --git a/Telegram/SourceFiles/window/window_session_controller_link_info.h b/Telegram/SourceFiles/window/window_session_controller_link_info.h
+index a07a28508f..7311510d0e 100644
+--- a/Telegram/SourceFiles/window/window_session_controller_link_info.h
++++ b/Telegram/SourceFiles/window/window_session_controller_link_info.h
+@@ -46,6 +46,8 @@ struct PeerByLinkInfo {
+ 	int giftCollectionId = 0;
+ 	std::optional<TimeId> videoTimestamp;
+ 	QString text;
++	// LeadSearcher: сообщение, ответом на которое встаёт черновик из ссылки.
++	MsgId draftReplyTo = MsgId();
+ 	RepliesByLinkInfo repliesInfo;
+ 	ResolveType resolveType = ResolveType::Default;
+ 	QString referral;
+-- 
+2.52.0.windows.1
+

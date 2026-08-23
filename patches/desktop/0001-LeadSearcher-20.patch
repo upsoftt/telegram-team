@@ -1,0 +1,223 @@
+From 0e5739db304e10a622a37028705375d538a71ace Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Tue, 28 Jul 2026 03:10:47 +0300
+Subject: =?UTF-8?q?LeadSearcher:=20=D1=81=D0=B2=D0=BE=D0=B9=20=D0=BA=D0=BB?=
+ =?UTF-8?q?=D0=B8=D0=B5=D0=BD=D1=82,=2020=20=D0=B0=D0=BA=D0=BA=D0=B0=D1=83?=
+ =?UTF-8?q?=D0=BD=D1=82=D0=BE=D0=B2=20=D0=B8=20=D0=BF=D0=B5=D1=80=D0=B5?=
+ =?UTF-8?q?=D1=85=D0=BE=D0=B4=20=D0=BA=20=D1=81=D0=B8=D0=B3=D0=BD=D0=B0?=
+ =?UTF-8?q?=D0=BB=D1=83=20=D0=BF=D0=BE=D0=B4=20=D0=BD=D1=83=D0=B6=D0=BD?=
+ =?UTF-8?q?=D1=8B=D0=BC=20=D0=B0=D0=BA=D0=BA=D0=B0=D1=83=D0=BD=D1=82=D0=BE?=
+ =?UTF-8?q?=D0=BC?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ Telegram/CMakeLists.txt                       |  4 +-
+ Telegram/SourceFiles/core/application.cpp     | 80 +++++++++++++++----
+ Telegram/SourceFiles/core/application.h       |  4 +
+ Telegram/SourceFiles/core/version.h           |  8 +-
+ Telegram/SourceFiles/main/main_domain.h       |  7 +-
+ .../win/windows_app_user_model_id.cpp         |  6 +-
+ 6 files changed, 87 insertions(+), 22 deletions(-)
+
+diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
+index 1567c97ab4..841f81675b 100644
+--- a/Telegram/CMakeLists.txt
++++ b/Telegram/CMakeLists.txt
+@@ -2348,7 +2348,9 @@ else()
+         set(bundle_identifier "com.tdesktop.Telegram")
+     endif()
+     set(bundle_entitlements "Telegram.entitlements")
+-    set(output_name "Telegram")
++    # LeadSearcher: отдельное имя файла, чтобы наша сборка и личный Telegram
++    # не путались ни в ярлыках, ни в списке процессов.
++    set(output_name "TelegramTeam")
+ endif()
+ 
+ if (CMAKE_GENERATOR STREQUAL Xcode)
+diff --git a/Telegram/SourceFiles/core/application.cpp b/Telegram/SourceFiles/core/application.cpp
+index 8a41ca5410..f13295c50c 100644
+--- a/Telegram/SourceFiles/core/application.cpp
++++ b/Telegram/SourceFiles/core/application.cpp
+@@ -102,6 +102,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ 
+ #include <QtCore/QStandardPaths>
+ #include <QtCore/QMimeDatabase>
++#include <QtCore/QUrlQuery>
+ #include <QtGui/QGuiApplication>
+ #include <QtGui/QScreen>
+ 
+@@ -1201,8 +1202,67 @@ bool Application::canApplyLangPackWithoutRestart() const {
+ 	return true;
+ }
+ 
++Main::Account *Application::accountByUserId(uint64 userId) const {
++	if (!userId || !_domain->started()) {
++		return nullptr;
++	}
++	for (const auto &withIndex : _domain->accounts()) {
++		const auto account = withIndex.account.get();
++		if (const auto session = account->maybeSession()) {
++			if (session->userId().bare == userId) {
++				return account;
++			}
++		}
++	}
++	return nullptr;
++}
++
++bool Application::switchAccountForStartUrls() {
++	auto switched = false;
++	for (auto &url : cRefStartUrls()) {
++		if (url.scheme() != u"tgteam"_q) {
++			continue;
++		}
++		auto query = QUrlQuery(url.query());
++		const auto requested = query.queryItemValue(
++			u"account"_q).toULongLong();
++		query.removeAllQueryItems(u"account"_q);
++
++		// Дальше ссылку разбирают обычные обработчики, они знают только tg://.
++		url.setScheme(u"tg"_q);
++		url.setQuery(query);
++
++		if (!requested) {
++			continue;
++		}
++		const auto account = accountByUserId(requested);
++		if (!account) {
++			// Молча открыть чужим аккаунтом хуже, чем не переключиться:
++			// ответ ушёл бы не от того человека.
++			if (_lastActivePrimaryWindow) {
++				_lastActivePrimaryWindow->showToast(u"Аккаунт, который читает "
++					"этот чат, не подключён здесь. Открываю текущим."_q);
++			}
++			continue;
++		}
++		if (&_domain->active() != account) {
++			_domain->activate(account);
++			switched = true;
++		}
++	}
++	return switched;
++}
++
+ void Application::checkStartUrls() {
+ 	if (_setupEmailLock.current()) {
++		// Ссылки остаются в очереди и разберутся, когда блокировка снимется:
++		// трогать их сейчас нельзя, иначе параметр account потеряется впустую.
++		return;
++	}
++	// Переключение аккаунта перестраивает окно, поэтому ссылка открывается
++	// следующим тиком — иначе она уходит в прежнюю сессию.
++	if (switchAccountForStartUrls()) {
++		InvokeQueued(this, [=] { checkStartUrls(); });
+ 		return;
+ 	}
+ 	if (!Core::App().passcodeLocked()) {
+@@ -2034,23 +2094,15 @@ void Application::RegisterUrlScheme() {
+ 		? u"-workdir \"%1\""_q.arg(cWorkingDir())
+ 		: QString();
+ 
++	// LeadSearcher: схемы tg:// и tonsite:// остаются за личным Telegram.
++	// Забрав их себе, эта сборка перехватывала бы вообще все ссылки системы,
++	// причём заново при каждом запуске.
+ 	base::Platform::RegisterUrlScheme(base::Platform::UrlSchemeDescriptor{
+ 		.executable = Platform::ExecutablePathForShortcuts(),
+ 		.arguments = arguments,
+-		.protocol = u"tg"_q,
+-		.protocolName = u"Telegram Link"_q,
+-		.shortAppName = u"tdesktop"_q,
+-		.longAppName = QCoreApplication::applicationName(),
+-		.displayAppName = AppName.utf16(),
+-		.displayAppDescription = AppName.utf16(),
+-	});
+-
+-	base::Platform::RegisterUrlScheme(base::Platform::UrlSchemeDescriptor{
+-		.executable = Platform::ExecutablePathForShortcuts(),
+-		.arguments = arguments,
+-		.protocol = u"tonsite"_q,
+-		.protocolName = u"TonSite Link"_q,
+-		.shortAppName = u"tdesktop"_q,
++		.protocol = u"tgteam"_q,
++		.protocolName = u"Telegram Team Link"_q,
++		.shortAppName = u"tdesktopteam"_q,
+ 		.longAppName = QCoreApplication::applicationName(),
+ 		.displayAppName = AppName.utf16(),
+ 		.displayAppDescription = AppName.utf16(),
+diff --git a/Telegram/SourceFiles/core/application.h b/Telegram/SourceFiles/core/application.h
+index ada2cf5f1a..f7cd41766f 100644
+--- a/Telegram/SourceFiles/core/application.h
++++ b/Telegram/SourceFiles/core/application.h
+@@ -289,6 +289,10 @@ public:
+ 
+ 	// Internal links.
+ 	void checkStartUrls();
++	// LeadSearcher: ссылка вида tgteam://…&account=<user id> открывается тем
++	// аккаунтом, который читает чат, а не текущим активным.
++	[[nodiscard]] Main::Account *accountByUserId(uint64 userId) const;
++	bool switchAccountForStartUrls();
+ 	bool openLocalUrl(const QString &url, QVariant context);
+ 	bool openInternalUrl(const QString &url, QVariant context);
+ 	[[nodiscard]] QString changelogLink() const;
+diff --git a/Telegram/SourceFiles/core/version.h b/Telegram/SourceFiles/core/version.h
+index cc2354e7ba..fea8fd514a 100644
+--- a/Telegram/SourceFiles/core/version.h
++++ b/Telegram/SourceFiles/core/version.h
+@@ -18,10 +18,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #endif // TDESKTOP_ALLOW_CLOSED_ALPHA
+ 
+ // used in Updater.cpp and Setup.iss for Windows
+-constexpr auto AppId = "{53F49750-6209-4FBF-9CA8-7A333C87D1ED}"_cs;
++// LeadSearcher: собственная сборка живёт рядом с личным Telegram, поэтому у
++// неё свой идентификатор, своё имя и свой каталог данных (%APPDATA%\AppName).
++constexpr auto AppId = "{7B4C1E52-9A63-4D18-B5E0-2F8A6C31D907}"_cs;
+ constexpr auto AppNameOld = "Telegram Win (Unofficial)"_cs;
+-constexpr auto AppName = "Telegram Desktop"_cs;
+-constexpr auto AppFile = "Telegram"_cs;
++constexpr auto AppName = "Telegram Team"_cs;
++constexpr auto AppFile = "TelegramTeam"_cs;
+ constexpr auto AppVersion = 7001001;
+ constexpr auto AppVersionStr = "7.1.1";
+ constexpr auto AppBetaVersion = false;
+diff --git a/Telegram/SourceFiles/main/main_domain.h b/Telegram/SourceFiles/main/main_domain.h
+index 99e2c9d5b3..9245205381 100644
+--- a/Telegram/SourceFiles/main/main_domain.h
++++ b/Telegram/SourceFiles/main/main_domain.h
+@@ -31,8 +31,11 @@ public:
+ 		std::unique_ptr<Account> account;
+ 	};
+ 
+-	static constexpr auto kMaxAccounts = 3;
+-	static constexpr auto kPremiumMaxAccounts = 6;
++	// LeadSearcher: мониторинг ведут больше аккаунтов, чем пускает
++	// официальная сборка. Ограничение чисто клиентское, сервер его не
++	// проверяет.
++	static constexpr auto kMaxAccounts = 20;
++	static constexpr auto kPremiumMaxAccounts = 20;
+ 
+ 	explicit Domain(const QString &dataName);
+ 	~Domain();
+diff --git a/Telegram/SourceFiles/platform/win/windows_app_user_model_id.cpp b/Telegram/SourceFiles/platform/win/windows_app_user_model_id.cpp
+index 3d051f4ce0..2feca710a1 100644
+--- a/Telegram/SourceFiles/platform/win/windows_app_user_model_id.cpp
++++ b/Telegram/SourceFiles/platform/win/windows_app_user_model_id.cpp
+@@ -25,10 +25,12 @@ const PROPERTYKEY pkey_AppUserModel_ID = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8,
+ const PROPERTYKEY pkey_AppUserModel_StartPinOption = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 12 };
+ const PROPERTYKEY pkey_AppUserModel_ToastActivator = { { 0x9F4C2855, 0x9F79, 0x4B39, { 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, 26 };
+ 
++// LeadSearcher: свой идентификатор, иначе окна этой сборки складываются в
++// панели задач в одну кнопку с личным Telegram.
+ #ifdef OS_WIN_STORE
+-const WCHAR AppUserModelIdBase[] = L"Telegram.TelegramDesktop.Store";
++const WCHAR AppUserModelIdBase[] = L"Telegram.TelegramTeam.Store";
+ #else // OS_WIN_STORE
+-const WCHAR AppUserModelIdBase[] = L"Telegram.TelegramDesktop";
++const WCHAR AppUserModelIdBase[] = L"Telegram.TelegramTeam";
+ #endif // OS_WIN_STORE
+ 
+ [[nodiscard]] QString PinnedIconsPath() {
+-- 
+2.52.0.windows.1
+
