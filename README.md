@@ -11,8 +11,8 @@
    нет вовсе: `tg://`-ссылка открывается тем аккаунтом, который активен в этот момент.
 
 Всё остальное — обычный Telegram: тот же код, те же серверы, то же шифрование.
-Правок шесть файлов на Windows и семь на iPhone, их полный текст лежит в `patches/` —
-можно прочитать глазами за десять минут.
+Правки занимают меньше пятисот строк в двадцати пяти файлах (сотня из них — описание
+набора иконок), их полный текст лежит в `patches/` и читается глазами за один присест.
 
 ## Скачать
 
@@ -43,6 +43,7 @@ Windows-сборка **портативная**: распаковать в лю�
 | `core/local_url_handlers.cpp` | текст ответа из ссылки подставляется в поле ввода и в чатах без публичного имени |
 | `platform/win/windows_app_user_model_id.cpp` | своя группа в панели задач |
 | `Telegram/CMakeLists.txt` | имя выходного файла |
+| `config.h` и три места использования | ключ приложения перемешан на этапе компиляции и не лежит в файле открытым текстом |
 
 ### iPhone (`patches/ios`)
 
@@ -61,7 +62,7 @@ Windows-сборка **портативная**: распаковать в лю�
 Это важнее того, что есть, потому что речь о мессенджере:
 
 - **никакой телеметрии, аналитики и «домашних» серверов.** Ни одна правка не добавляет
-  сетевых обращений: сравните `patches/` с апстримом — там всего 300 строк;
+  сетевых обращений — в этом можно убедиться, прочитав `patches/` целиком;
 - **никаких чужих форков в основе.** Только `telegramdesktop/tdesktop` и
   `TelegramMessenger/Telegram-iOS`, стабильные теги. 64Gram, AyuGram, Kotatogram и прочие
   не используются намеренно: чтобы отвечать за то, что происходит с рабочими аккаунтами,
@@ -120,8 +121,8 @@ sources (`telegramdesktop/tdesktop` and `TelegramMessenger/Telegram-iOS`, stable
 two changes: the account limit is raised to 50, and a `tgteam://…&account=<user id>` link
 switches to the given account before opening a chat or message.
 
-All modifications are in `patches/` — six files on desktop, seven on iOS, about 300 lines
-in total. No telemetry, no analytics, no auto-update, no third-party fork in the base.
+All modifications are in `patches/` — fewer than 500 lines across 25 files. No telemetry,
+no analytics, no auto-update, no third-party fork in the base.
 
 Telegram Desktop is GPLv3 (with the OpenSSL exception), Telegram-iOS is GPLv2; both allow
 modification and redistribution provided the modified source is published — which is what

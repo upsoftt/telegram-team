@@ -1,0 +1,152 @@
+From 5f210bd43795d3b44a61a1d2fc805823e7992c27 Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Mon, 24 Aug 2026 00:18:25 +0300
+Subject: [PATCH] LeadSearcher: api hash scrambled in binary
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Ключ приложения больше не лежит в собранном файле открытым текстом:
+перемешивание считается на этапе компиляции, обратное преобразование —
+при первом обращении. Нужно потому, что сборка раздаётся свободно, а
+вынутый из файла api_hash приводит к ограничениям у наших же
+пользователей.
+---
+ Telegram/SourceFiles/config.h                 | 54 ++++++++++++++++++-
+ .../SourceFiles/data/components/passkeys.cpp  |  4 +-
+ Telegram/SourceFiles/intro/intro_phone.cpp    |  4 +-
+ Telegram/SourceFiles/intro/intro_qr.cpp       |  4 +-
+ 4 files changed, 58 insertions(+), 8 deletions(-)
+
+diff --git a/Telegram/SourceFiles/config.h b/Telegram/SourceFiles/config.h
+index b2da317578..3b1e15698b 100644
+--- a/Telegram/SourceFiles/config.h
++++ b/Telegram/SourceFiles/config.h
+@@ -61,7 +61,54 @@ w/CVnbwQOw0g5GBwwFV3r0uTTvy44xx8XXxk+Qknu4eBCsmrAFNnAgMBAAE=\n\
+ #if defined TDESKTOP_API_ID && defined TDESKTOP_API_HASH
+ 
+ constexpr auto ApiId = TDESKTOP_API_ID;
+-constexpr auto ApiHash = QT_STRINGIFY(TDESKTOP_API_HASH);
++
++// Ключ приложения не лежит в файле открытым текстом. Сборка раздаётся свободно,
++// а из готового .exe тридцатидвухзначный api_hash вынимается поиском строк за
++// минуту; дальше чужие ходят в Telegram под нашим ключом, и ограничения
++// прилетают не им, а нашим пользователям.
++//
++// Перемешивание считается на этапе компиляции, поэтому в файл попадают уже
++// перемешанные байты, а исходный литерал не попадает вовсе. Это не защита —
++// обратное преобразование лежит здесь же, и человек с отладчиком достанет ключ
++// за полчаса, — а препятствие для тех, кто собирает ключи из чужих сборок
++// автоматически.
++namespace details {
++
++constexpr auto kApiHashSize = 32;
++constexpr auto kApiHashSeed = 0x5Au;
++
++[[nodiscard]] constexpr auto ApiHashMask(int index) {
++	return (unsigned char)((kApiHashSeed + index * 7 + (index >> 2)) & 0xFF);
++}
++
++[[nodiscard]] constexpr auto MakeScrambledApiHash() {
++	constexpr char source[] = QT_STRINGIFY(TDESKTOP_API_HASH);
++	static_assert(sizeof(source) == kApiHashSize + 1,
++		"api_hash должен быть длиной 32 знака");
++
++	auto result = std::array<unsigned char, kApiHashSize>();
++	for (auto i = 0; i != kApiHashSize; ++i) {
++		result[i] = (unsigned char)(source[i]) ^ ApiHashMask(i);
++	}
++	return result;
++}
++
++constexpr auto kScrambledApiHash = MakeScrambledApiHash();
++
++} // namespace details
++
++[[nodiscard]] inline const char *ApiHashValue() {
++	static const auto value = [] {
++		auto result = std::array<char, details::kApiHashSize + 1>();
++		for (auto i = 0; i != details::kApiHashSize; ++i) {
++			result[i] = (char)(details::kScrambledApiHash[i]
++				^ details::ApiHashMask(i));
++		}
++		result[details::kApiHashSize] = char(0);
++		return result;
++	}();
++	return value.data();
++}
+ 
+ #else // TDESKTOP_API_ID && TDESKTOP_API_HASH
+ 
+@@ -83,7 +130,10 @@ constexpr auto ApiHash = QT_STRINGIFY(TDESKTOP_API_HASH);
+ #error You are required to provide API_ID and API_HASH.
+ 
+ constexpr auto ApiId = 17349;
+-constexpr auto ApiHash = "344583e45741c457fe1862106095a5eb";
++
++[[nodiscard]] inline const char *ApiHashValue() {
++	return "344583e45741c457fe1862106095a5eb";
++}
+ 
+ #endif // TDESKTOP_API_ID && TDESKTOP_API_HASH
+ 
+diff --git a/Telegram/SourceFiles/data/components/passkeys.cpp b/Telegram/SourceFiles/data/components/passkeys.cpp
+index 5f376d3a11..9c623412d2 100644
+--- a/Telegram/SourceFiles/data/components/passkeys.cpp
++++ b/Telegram/SourceFiles/data/components/passkeys.cpp
+@@ -1,4 +1,4 @@
+-/*
++﻿/*
+ This file is part of Telegram Desktop,
+ the official desktop application for the Telegram messaging service.
+ 
+@@ -149,7 +149,7 @@ void InitPasskeyLogin(
+ 		Fn<void(const Data::Passkey::LoginData&)> done) {
+ 	api.request(MTPauth_InitPasskeyLogin(
+ 		MTP_int(ApiId),
+-		MTP_string(ApiHash)
++		MTP_string(ApiHashValue())
+ 	)).done([=](const MTPauth_PasskeyLoginOptions &result) {
+ 		const auto &data = result.data();
+ 		if (const auto p = Passkey::DeserializeLoginData(
+diff --git a/Telegram/SourceFiles/intro/intro_phone.cpp b/Telegram/SourceFiles/intro/intro_phone.cpp
+index ee14ffa7c6..866d0b1b35 100644
+--- a/Telegram/SourceFiles/intro/intro_phone.cpp
++++ b/Telegram/SourceFiles/intro/intro_phone.cpp
+@@ -1,4 +1,4 @@
+-/*
++﻿/*
+ This file is part of Telegram Desktop,
+ the official desktop application for the Telegram messaging service.
+ 
+@@ -206,7 +206,7 @@ void PhoneWidget::submit() {
+ 	_sentRequest = api().request(MTPauth_SendCode(
+ 		MTP_string(_sentPhone),
+ 		MTP_int(ApiId),
+-		MTP_string(ApiHash),
++		MTP_string(ApiHashValue()),
+ 		MTP_codeSettings(
+ 			MTP_flags(0),
+ 			MTPVector<MTPbytes>(),
+diff --git a/Telegram/SourceFiles/intro/intro_qr.cpp b/Telegram/SourceFiles/intro/intro_qr.cpp
+index f5b68e7ce1..0895389f25 100644
+--- a/Telegram/SourceFiles/intro/intro_qr.cpp
++++ b/Telegram/SourceFiles/intro/intro_qr.cpp
+@@ -1,4 +1,4 @@
+-/*
++﻿/*
+ This file is part of Telegram Desktop,
+ the official desktop application for the Telegram messaging service.
+ 
+@@ -446,7 +446,7 @@ void QrWidget::refreshCode() {
+ 	}
+ 	_requestId = api().request(MTPauth_ExportLoginToken(
+ 		MTP_int(ApiId),
+-		MTP_string(ApiHash),
++		MTP_string(ApiHashValue()),
+ 		MTP_vector<MTPlong>(0)
+ 	)).done([=](const MTPauth_LoginToken &result) {
+ 		handleTokenResult(result);
+-- 
+2.52.0.windows.1
+
