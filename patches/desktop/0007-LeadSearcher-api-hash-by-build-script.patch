@@ -1,0 +1,119 @@
+From 09002edaa622361806749b8ad8480a3051f55eae Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Mon, 24 Aug 2026 03:55:58 +0300
+Subject: [PATCH] LeadSearcher: api hash scrambled by build script
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Перемешивание на этапе компиляции не работало: MSVC всё равно клал исходный
+литерал в .exe, и после сборки api_hash находился в файле обычным поиском строк.
+Теперь ключ приходит уже перемешанным — TDESKTOP_API_HASH_SCRAMBLED, шестьдесят
+четыре шестнадцатеричных знака, — а исходного литерала в коде нет вовсе.
+
+Если перемешанный ключ не задан, работает обычный путь апстрима: сборка «своими
+руками» по описанию в репозитории от этого не ломается.
+---
+ Telegram/CMakeLists.txt       |  9 ++++++++
+ Telegram/SourceFiles/config.h | 43 +++++++++++++++++++++++------------
+ 2 files changed, 38 insertions(+), 14 deletions(-)
+
+diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
+index 841f81675b..c605cbf642 100644
+--- a/Telegram/CMakeLists.txt
++++ b/Telegram/CMakeLists.txt
+@@ -2392,6 +2392,15 @@ PRIVATE
+     G_LOG_DOMAIN="Telegram"
+ )
+ 
++# Раздаваемая сборка получает ключ приложения уже перемешанным, чтобы он не
++# лежал в готовом файле открытым текстом. Не задан — работает обычный путь.
++if (TDESKTOP_API_HASH_SCRAMBLED)
++    target_compile_definitions(Telegram
++    PRIVATE
++        TDESKTOP_API_HASH_SCRAMBLED=${TDESKTOP_API_HASH_SCRAMBLED}
++    )
++endif()
++
+ get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+ if (APPLE
+     OR is_multi_config
+diff --git a/Telegram/SourceFiles/config.h b/Telegram/SourceFiles/config.h
+index 3b1e15698b..cd6b8fa4a4 100644
+--- a/Telegram/SourceFiles/config.h
++++ b/Telegram/SourceFiles/config.h
+@@ -72,6 +72,14 @@ constexpr auto ApiId = TDESKTOP_API_ID;
+ // обратное преобразование лежит здесь же, и человек с отладчиком достанет ключ
+ // за полчаса, — а препятствие для тех, кто собирает ключи из чужих сборок
+ // автоматически.
++// Перемешанный ключ приходит уже готовым из сборочного скрипта: считать его на
++// этапе компиляции из обычного литерала нельзя — компилятор всё равно кладёт
++// исходную строку в файл (проверено 24.08.2026: после сборки api_hash находился
++// в .exe поиском строк). Поэтому исходного литерала в коде нет вовсе, а
++// TDESKTOP_API_HASH_SCRAMBLED несёт шестьдесят четыре шестнадцатеричных знака.
++//
++// Если перемешанного ключа не задали, работает обычный путь апстрима — сборка
++// «своими руками» по описанию в репозитории от этого не ломается.
+ namespace details {
+ 
+ constexpr auto kApiHashSize = 32;
+@@ -81,28 +89,27 @@ constexpr auto kApiHashSeed = 0x5Au;
+ 	return (unsigned char)((kApiHashSeed + index * 7 + (index >> 2)) & 0xFF);
+ }
+ 
+-[[nodiscard]] constexpr auto MakeScrambledApiHash() {
+-	constexpr char source[] = QT_STRINGIFY(TDESKTOP_API_HASH);
+-	static_assert(sizeof(source) == kApiHashSize + 1,
+-		"api_hash должен быть длиной 32 знака");
+-
+-	auto result = std::array<unsigned char, kApiHashSize>();
+-	for (auto i = 0; i != kApiHashSize; ++i) {
+-		result[i] = (unsigned char)(source[i]) ^ ApiHashMask(i);
+-	}
+-	return result;
++[[nodiscard]] inline int HexDigit(char c) {
++	return (c >= '0' && c <= '9')
++		? (c - '0')
++		: ((c >= 'a' && c <= 'f')
++			? (c - 'a' + 10)
++			: ((c >= 'A' && c <= 'F') ? (c - 'A' + 10) : 0));
+ }
+ 
+-constexpr auto kScrambledApiHash = MakeScrambledApiHash();
+-
+ } // namespace details
+ 
++#ifdef TDESKTOP_API_HASH_SCRAMBLED
++
+ [[nodiscard]] inline const char *ApiHashValue() {
+ 	static const auto value = [] {
++		const auto scrambled = QT_STRINGIFY(TDESKTOP_API_HASH_SCRAMBLED);
+ 		auto result = std::array<char, details::kApiHashSize + 1>();
+ 		for (auto i = 0; i != details::kApiHashSize; ++i) {
+-			result[i] = (char)(details::kScrambledApiHash[i]
+-				^ details::ApiHashMask(i));
++			const auto byte = (unsigned char)(
++				(details::HexDigit(scrambled[i * 2]) << 4)
++				| details::HexDigit(scrambled[i * 2 + 1]));
++			result[i] = (char)(byte ^ details::ApiHashMask(i));
+ 		}
+ 		result[details::kApiHashSize] = char(0);
+ 		return result;
+@@ -110,6 +117,14 @@ constexpr auto kScrambledApiHash = MakeScrambledApiHash();
+ 	return value.data();
+ }
+ 
++#else // TDESKTOP_API_HASH_SCRAMBLED
++
++[[nodiscard]] inline const char *ApiHashValue() {
++	return QT_STRINGIFY(TDESKTOP_API_HASH);
++}
++
++#endif // TDESKTOP_API_HASH_SCRAMBLED
++
+ #else // TDESKTOP_API_ID && TDESKTOP_API_HASH
+ 
+ // To build your version of Telegram Desktop you're required to provide
+-- 
+2.52.0.windows.1
+

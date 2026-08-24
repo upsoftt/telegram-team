@@ -129,7 +129,7 @@ function Repair-LibvpxDebugAssembly {
 
 function Repair-QtVulkanLink {
     # Qt собирается с поддержкой Vulkan, если на машине установлен Vulkan SDK
-    # (у владельца — G:\SDK\Vulkan). Тогда qwindows.lib ссылается на
+    # (достаточно самого факта установки). Тогда qwindows.lib ссылается на
     # QBasicPlatformVulkanInstance, а список библиотек Qt в сборке Telegram эту
     # реализацию не подключает: официальная сборка идёт без Vulkan. Линковка
     # падает с LNK2019 на четырнадцати символах — и не в самом клиенте, а во
@@ -177,6 +177,22 @@ function Get-TelegramCredentials {
         throw 'Не найден ключ приложения Telegram: задайте TELEGRAM_API_ID и TELEGRAM_API_HASH (получить — my.telegram.org).'
     }
     return @{ ID = $apiID; Hash = $apiHash }
+}
+
+function Get-ScrambledApiHash([string]$hash) {
+    # Ключ уходит в компилятор уже перемешанным: считать перемешивание в самом
+    # коде бесполезно — MSVC всё равно кладёт исходный литерал в .exe, и после
+    # сборки 24.08.2026 api_hash находился в файле обычным поиском строк.
+    # Обратное преобразование живёт в config.h; маска здесь и там обязана
+    # совпадать.
+    if ($hash.Length -ne 32) { throw "api_hash должен быть длиной 32 знака, а не $($hash.Length)" }
+    $bytes = [System.Text.Encoding]::ASCII.GetBytes($hash)
+    $result = New-Object System.Text.StringBuilder
+    for ($i = 0; $i -lt 32; $i++) {
+        $mask = (0x5A + $i * 7 + [Math]::Floor($i / 4)) -band 0xFF
+        [void]$result.Append(('{0:x2}' -f ($bytes[$i] -bxor $mask)))
+    }
+    return $result.ToString()
 }
 
 New-Item -ItemType Directory -Force $Root | Out-Null
@@ -240,8 +256,9 @@ if ($Configure) {
     # Имя переменной не должно повторять имя параметра скрипта: PowerShell не
     # различает регистр, и $configure затирает переключатель $Configure.
     $configureScript = Join-Path $sourcePath 'Telegram\configure.bat'
+    $scrambled = Get-ScrambledApiHash $credentials.Hash
     Invoke-InBuildEnvironment (Join-Path $sourcePath 'Telegram') `
-        "call `"$configureScript`" x64 -D TDESKTOP_API_ID=$($credentials.ID) -D TDESKTOP_API_HASH=$($credentials.Hash)" `
+        "call `"$configureScript`" x64 -D TDESKTOP_API_ID=$($credentials.ID) -D TDESKTOP_API_HASH=$($credentials.Hash) -D TDESKTOP_API_HASH_SCRAMBLED=$scrambled" `
         'настройка проекта'
     Write-Step 'Проект настроен'
 }
