@@ -38,6 +38,37 @@ Windows-сборка **портативная**: распаковать в лю�
 (Get-FileHash TelegramTeam-*-windows-x64.zip -Algorithm SHA256).Hash
 ```
 
+## На какой версии Telegram это собрано
+
+| Платформа | Версия Telegram | Дата версии | Заметки Telegram |
+|---|---|---|---|
+| Windows | Telegram Desktop **7.1.1** | 22 августа 2026 | [заметки к версии](https://github.com/telegramdesktop/tdesktop/releases/tag/v7.1.1) |
+| iPhone | Telegram for iOS **12.9.2** (раздаётся как сборка 5) | 17 июля 2026 | [анонс от 14 июля 2026](https://telegram.org/blog/communities-editor-invisible-messages) |
+
+Номер сборки здесь совпадает с номером версии Telegram: `TelegramTeam-7.1.1` — это Telegram
+Desktop 7.1.1 плюс восемь патчей из `patches/desktop`. Правки лежат отдельными коммитами
+поверх стабильного тега, поэтому переход на новую версию Telegram — это `git merge` нового
+тега, а не перенос изменений руками, и обновления от Telegram не задерживаются.
+
+**Что сам Telegram добавил в 7.1** (Windows, по его заметкам к версии):
+
+- приветственные сообщения для групп и каналов;
+- кнопки и блоки с файлами в оформленных сообщениях, аккуратнее списки, таблицы и вставка
+  разметки в редакторе;
+- таймер самоуничтожения и просмотр «один раз» для фото и видео;
+- видео вместо аватарки — себе, чатам и каналам;
+- видеоредактор: обрезка, качество и выбор кадра для обложки;
+- восстановление открытых окон и чатов при перезапуске;
+- отправка музыки из меню вложений;
+- новый тип прокси WEB в настройках соединения.
+
+Сама 7.1.1 поверх этого чинит загрузку чатов у части пользователей и мелкие ошибки.
+
+**Что Telegram анонсировал в 12.9** (iPhone): редактор оформленного текста для статей и
+длинных постов (таблицы, списки, заголовки, до 32 000 знаков в сообщении), «Сообщества» —
+несколько каналов, групп и ботов одной строкой в списке чатов, ответы ботов, видимые только
+вам, и поиск по 350 миллионам GIF.
+
 ## Что именно изменено
 
 Подробный разбор — [`docs/changes.md`](docs/changes.md). Коротко:
@@ -147,6 +178,10 @@ An unofficial build of Telegram for Windows and iPhone, made from the original u
 sources (`telegramdesktop/tdesktop` and `TelegramMessenger/Telegram-iOS`, stable tags) with
 two changes: the account limit is raised to 50, and a `tgteam://…&account=<user id>` link
 switches to the given account before opening a chat or message.
+
+Current base versions: **Telegram Desktop 7.1.1** (released 22 August 2026) for Windows and
+**Telegram for iOS 12.9.2** (17 July 2026) for iPhone — everything Telegram shipped in those
+releases is present here.
 
 All modifications are in `patches/` — fewer than 500 lines across 25 files. No telemetry,
 no analytics, no auto-update, no third-party fork in the base.
