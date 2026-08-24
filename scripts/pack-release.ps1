@@ -27,6 +27,9 @@ if (-not (Test-Path $Exe)) { throw "Программа не найдена: $Exe
 $version = (Get-Item $Exe).VersionInfo.ProductVersion
 if ([string]::IsNullOrWhiteSpace($version)) { $version = (Get-Item $Exe).VersionInfo.FileVersion }
 $version = ($version -split '\s')[0]
+# У ресурса версии четыре числа (7.1.1.0), а людям привычны три — лишний ноль в имени
+# файла только путает при сверке с версией в самом клиенте.
+if ($version -match '^(\d+\.\d+\.\d+)\.0$') { $version = $Matches[1] }
 Write-Host "Версия программы: $version" -ForegroundColor Cyan
 
 # Ключ приложения в раздаваемом файле открытым текстом лежать не должен: он вынимается
