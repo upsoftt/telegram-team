@@ -2,6 +2,9 @@
 # Номер сборки передаётся первым аргументом: TestFlight не принимает
 # повторный номер, каждая загрузка должна быть больше предыдущей.
 BUILD_NUMBER="${1:-1}"
+# Признак конца от прошлого прогона убирается сразу: иначе ждущий цикл увидит
+# старый код возврата и решит, что новая сборка уже закончилась.
+rm -f "$HOME/tgteam-build.status"
 
 # Пароль учётной записи в репозиторий не кладётся — он живёт только на самой
 # сборочной машине, в ~/.tgteam-build.env со строкой KEYCHAIN_PASSWORD=<пароль>.
@@ -23,8 +26,14 @@ if ! security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$HOME/Library/Keychains/l
 fi
 security set-keychain-settings "$HOME/Library/Keychains/login.keychain-db"
 cd "$HOME/Projects/Telegram-iOS"
-./build-input/bazel-8.4.2-darwin-x86_64 shutdown >/dev/null 2>&1
-python3 build-system/Make/Make.py --cacheDir="$HOME/telegram-bazel-cache" build \
+# Версия Bazel меняется вместе с апстримом (8.4.2 до 13.0, 9.2.0 с 13.0) —
+# гасим демон любой скачанной.
+for bazel in ./build-input/bazel-*-darwin-x86_64; do
+	[ -x "$bazel" ] && "$bazel" shutdown >/dev/null 2>&1
+done
+# Telegram 13.0 объявляет Xcode 26.6, на сборочной машине может стоять более ранний: Make.py без
+# флага останавливается на сверке версии, с ним берёт установленный Xcode.
+python3 build-system/Make/Make.py --overrideXcodeVersion --cacheDir="$HOME/telegram-bazel-cache" build \
   --configurationPath=build-system/tgteam-configuration.json \
   --buildNumber="$BUILD_NUMBER" --configuration=release_arm64 \
   --codesigningInformationPath="$HOME/tgteam-codesigning" > "$HOME/tgteam-build.log" 2>&1

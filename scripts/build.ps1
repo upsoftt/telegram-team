@@ -24,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Tag = 'v7.1.1',
+    [string]$Tag = 'v7.3.1',
     [string]$Root = 'D:\Build\TelegramTeam',
     [string]$InstallPath = 'D:\Apps\TelegramTeam',
     [switch]$Sources,
@@ -33,6 +33,10 @@ param(
     [switch]$Build,
     [switch]$Deploy,
     [switch]$All,
+    # Сборка для своей команды: запрет копирования снимается в любом канале и
+    # группе. Раздаваемая сборка собирается без флага и снимает его только у
+    # администраторов канала.
+    [switch]$UnlockProtected,
     [int]$Jobs = 0
 )
 
@@ -125,6 +129,28 @@ function Repair-LibvpxDebugAssembly {
     # Только LF: git apply не примет патч с переводами строк Windows.
     [System.IO.File]::WriteAllText($patchPath, ($lines -join "`n") + "`n")
     Write-Step 'libvpx: убран флаг -gcv8, на котором падает NASM 3.02'
+}
+
+function Repair-FfmpegMsvcProbe {
+    # ffmpeg 8 узнаёт компилятор Microsoft по строке, которая НАЧИНАЕТСЯ со слова
+    # Microsoft (`grep -q ^Microsoft`), и ради этого сам ставит VSLANG=1033. С
+    # русской Visual Studio без английского языкового пакета cl отвечает
+    # «Оптимизирующий компилятор Microsoft…», VSLANG не помогает, configure решает,
+    # что это не MSVC, передаёт компилятору `-o` вместо `-Fo` и падает на
+    # «cl.exe is unable to create an executable file» (LNK1136 в ffbuild/config.log).
+    $script = Join-Path $Root 'Libraries\win64\patches\build_ffmpeg_win.sh'
+    if (-not (Test-Path $script)) { return }
+    $text = [System.IO.File]::ReadAllText($script)
+    if ($text.Contains('grep -q Microsoft/g')) { return }
+    # Репозиторий patches клонируется с core.autocrlf: строки бывают и CRLF.
+    $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $anchor = "cd `$FullScriptPath/../ffmpeg$nl"
+    if (-not $text.Contains($anchor)) {
+        throw "build_ffmpeg_win.sh изменился, не найдено место для правки проверки MSVC: $script"
+    }
+    $fix = "# TgTeam: русский cl не начинает ответ словом Microsoft${nl}sed -i 's/grep -q \^Microsoft/grep -q Microsoft/g' configure$nl"
+    [System.IO.File]::WriteAllText($script, $text.Replace($anchor, $anchor + $fix))
+    Write-Step 'ffmpeg: проверка MSVC узнаёт и русский компилятор'
 }
 
 function Repair-QtVulkanLink {
@@ -238,6 +264,7 @@ if ($Sources) {
 if ($Prepare) {
     # Самый долгий этап: Qt, WebRTC, ffmpeg, OpenSSL собираются из исходников.
     Repair-LibvpxDebugAssembly
+    Repair-FfmpegMsvcProbe
     Write-Step 'Готовлю сторонние библиотеки (несколько часов)'
     # silent = отвечать «пересобрать» самому. Без него скрипт Telegram на любой
     # изменившейся библиотеке задаёт вопрос в консоль и ждёт нажатия клавиши —
@@ -257,10 +284,13 @@ if ($Configure) {
     # различает регистр, и $configure затирает переключатель $Configure.
     $configureScript = Join-Path $sourcePath 'Telegram\configure.bat'
     $scrambled = Get-ScrambledApiHash $credentials.Hash
+    # Значение передаётся всегда, и ON, и OFF: CMake помнит его между настройками,
+    # и раздаваемая сборка после командной иначе молча унаследовала бы снятый запрет.
+    $unlock = if ($UnlockProtected) { 'ON' } else { 'OFF' }
     Invoke-InBuildEnvironment (Join-Path $sourcePath 'Telegram') `
-        "call `"$configureScript`" x64 -D TDESKTOP_API_ID=$($credentials.ID) -D TDESKTOP_API_HASH=$($credentials.Hash) -D TDESKTOP_API_HASH_SCRAMBLED=$scrambled" `
+        "call `"$configureScript`" x64 -D TDESKTOP_API_ID=$($credentials.ID) -D TDESKTOP_API_HASH=$($credentials.Hash) -D TDESKTOP_API_HASH_SCRAMBLED=$scrambled -D TGTEAM_UNLOCK_PROTECTED=$unlock" `
         'настройка проекта'
-    Write-Step 'Проект настроен'
+    Write-Step "Проект настроен (запрет копирования снят везде: $unlock)"
 }
 
 if ($Build) {
@@ -281,8 +311,12 @@ if ($Build) {
     # меряется в момент запуска и за часы сборки успевает уйти под сервер,
     # поэтому запас нужен кратный, а не впритык.
     if ($Jobs -le 0) {
-        $freeGB = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB
-        $cores = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+        # Без WMI: запрос к нему стоит почти две секунды процессора, а при
+        # нехватке памяти, ради которой считается это число, он первым
+        # перестаёт отвечать.
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        $freeGB = (New-Object Microsoft.VisualBasic.Devices.ComputerInfo).AvailablePhysicalMemory / 1GB
+        $cores = [Environment]::ProcessorCount
         $Jobs = [Math]::Max(2, [Math]::Min($cores, [Math]::Floor($freeGB / 10)))
     }
     Write-Step "Собираю клиент, одновременно $Jobs процессов компиляции"

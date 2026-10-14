@@ -1,0 +1,531 @@
+From 7ee2a19fe51ec49e63ebff635cdc4fc1328c2ae7 Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 16:44:42 +0300
+Subject: [PATCH 5/6] =?UTF-8?q?TgTeam:=20=D0=B7=D0=B0=D0=BF=D1=80=D0=B5?=
+ =?UTF-8?q?=D1=82=20=D0=BA=D0=BE=D0=BF=D0=B8=D1=80=D0=BE=D0=B2=D0=B0=D0=BD?=
+ =?UTF-8?q?=D0=B8=D1=8F=20=D1=81=D0=BD=D1=8F=D1=82=20=D0=B2=20=D0=BB=D1=8E?=
+ =?UTF-8?q?=D0=B1=D0=BE=D0=BC=20=D0=BA=D0=B0=D0=BD=D0=B0=D0=BB=D0=B5=20?=
+ =?UTF-8?q?=D0=B8=20=D0=B3=D1=80=D1=83=D0=BF=D0=BF=D0=B5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Сборка для своей команды: посты защищённых каналов и групп можно сохранять,
+копировать и пересылать, даже не будучи администратором. Окно настроек канала
+по-прежнему читает сам флаг, поэтому показывает настоящее значение.
+
+Сервер отказывает в пересылке защищённого сообщения и в повторном
+использовании его файлов, поэтому пересылка на входе в enqueueMessages
+заменяется копией. Копия встаёт в чат сразу, её вложение - новый ресурс
+TgTeamProtectedCopyMediaResource: когда загрузчику нужны байты, Fetch.swift
+докачивает оригинал и отдаёт файл, и тот загружается заново. Получателю
+доступ к каналу не нужен. Быстрая пересылка идёт тем же путём.
+---
+ .../Sources/Account/AccountManager.swift      |   1 +
+ .../PendingMessages/EnqueueMessage.swift      |   9 +
+ .../PendingMessages/TgTeamProtectedCopy.swift | 307 ++++++++++++++++++
+ .../TelegramCore/Sources/State/Fetch.swift    |   2 +
+ .../TelegramEngine/Data/PeersData.swift       |   6 +-
+ .../Sources/Utils/MessageUtils.swift          |  21 +-
+ .../Sources/Utils/PeerUtils.swift             |  16 +
+ .../Chat/ChatControllerQuickShare.swift       |  45 ++-
+ 8 files changed, 384 insertions(+), 23 deletions(-)
+ create mode 100644 submodules/TelegramCore/Sources/PendingMessages/TgTeamProtectedCopy.swift
+
+diff --git a/submodules/TelegramCore/Sources/Account/AccountManager.swift b/submodules/TelegramCore/Sources/Account/AccountManager.swift
+index a59eefd1..22729097 100644
+--- a/submodules/TelegramCore/Sources/Account/AccountManager.swift
++++ b/submodules/TelegramCore/Sources/Account/AccountManager.swift
+@@ -131,6 +131,7 @@ private var declaredEncodables: Void = {
+     declareEncodable(StickerPackCollectionInfo.self, f: { StickerPackCollectionInfo(decoder: $0) })
+     declareEncodable(StickerPackItem.self, f: { StickerPackItem(decoder: $0) })
+     declareEncodable(LocalFileReferenceMediaResource.self, f: { LocalFileReferenceMediaResource(decoder: $0) })
++    declareEncodable(TgTeamProtectedCopyMediaResource.self, f: { TgTeamProtectedCopyMediaResource(decoder: $0) })
+     declareEncodable(OutgoingMessageInfoAttribute.self, f: { OutgoingMessageInfoAttribute(decoder: $0) })
+     declareEncodable(PendingWalletTransferMessageAttribute.self, f: { PendingWalletTransferMessageAttribute(decoder: $0) })
+     declareEncodable(EphemeralMessageAttribute.self, f: { EphemeralMessageAttribute(decoder: $0) })
+diff --git a/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift b/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift
+index a8b125e8..72ad0229 100644
+--- a/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift
++++ b/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift
+@@ -695,6 +695,15 @@ private func opportunisticallyTransformOutgoingMedia(network: Network, postbox:
+ }
+ 
+ public func enqueueMessages(account: Account, peerId: PeerId, messages: [EnqueueMessage]) -> Signal<[MessageId?], NoError> {
++    // TgTeam: forwards of protected content, unlocked in this build, are
++    // turned into copies first, the server would refuse them otherwise.
++    return tgteamReplaceProtectedForwards(account: account, messages: messages)
++    |> mapToSignal { messages -> Signal<[MessageId?], NoError> in
++        return enqueueMessagesAsIs(account: account, peerId: peerId, messages: messages)
++    }
++}
++
++private func enqueueMessagesAsIs(account: Account, peerId: PeerId, messages: [EnqueueMessage]) -> Signal<[MessageId?], NoError> {
+     let signal: Signal<[(Bool, EnqueueMessage)], NoError>
+     if let transformOutgoingMessageMedia = account.transformOutgoingMessageMedia {
+         signal = opportunisticallyTransformOutgoingMedia(network: account.network, postbox: account.postbox, transformOutgoingMessageMedia: transformOutgoingMessageMedia, messages: messages, userInteractive: true)
+diff --git a/submodules/TelegramCore/Sources/PendingMessages/TgTeamProtectedCopy.swift b/submodules/TelegramCore/Sources/PendingMessages/TgTeamProtectedCopy.swift
+new file mode 100644
+index 00000000..a32207ec
+--- /dev/null
++++ b/submodules/TelegramCore/Sources/PendingMessages/TgTeamProtectedCopy.swift
+@@ -0,0 +1,307 @@
++import Foundation
++import Postbox
++import SwiftSignalKit
++
++// TgTeam: posts of a protected channel or group can't be forwarded: the
++// server refuses messages.forwardMessages for them and refuses reusing their
++// media too. So they are sent as copies - text keeps its formatting, albums
++// stay albums, voice messages stay voice messages, and the media is uploaded
++// anew.
++//
++// The copies are put into the chat at once, like any sent message. Their
++// media carries a TgTeamProtectedCopyMediaResource: when the uploader (or the
++// bubble) asks for its bytes, Fetch.swift downloads the original and hands the
++// file over. So the chat shows the messages right away with upload progress,
++// the order is kept, and a copy survives restarting the app.
++
++// Points at the media of the original protected message. Its bytes are the
++// bytes of that media, fetched on demand.
++public final class TgTeamProtectedCopyMediaResource: TelegramMediaResource {
++    public let copyId: Int64
++    public let messageId: MessageId
++    public let mediaId: MediaId
++    public let size: Int64?
++
++    public init(copyId: Int64, messageId: MessageId, mediaId: MediaId, size: Int64?) {
++        self.copyId = copyId
++        self.messageId = messageId
++        self.mediaId = mediaId
++        self.size = size
++    }
++
++    public required init(decoder: PostboxDecoder) {
++        self.copyId = decoder.decodeInt64ForKey("c", orElse: 0)
++        self.messageId = MessageId(
++            peerId: PeerId(decoder.decodeInt64ForKey("p", orElse: 0)),
++            namespace: decoder.decodeInt32ForKey("n", orElse: 0),
++            id: decoder.decodeInt32ForKey("i", orElse: 0)
++        )
++        self.mediaId = MediaId(
++            namespace: decoder.decodeInt32ForKey("mn", orElse: 0),
++            id: decoder.decodeInt64ForKey("mi", orElse: 0)
++        )
++        self.size = decoder.decodeOptionalInt64ForKey("s64")
++    }
++
++    public func encode(_ encoder: PostboxEncoder) {
++        encoder.encodeInt64(self.copyId, forKey: "c")
++        encoder.encodeInt64(self.messageId.peerId.toInt64(), forKey: "p")
++        encoder.encodeInt32(self.messageId.namespace, forKey: "n")
++        encoder.encodeInt32(self.messageId.id, forKey: "i")
++        encoder.encodeInt32(self.mediaId.namespace, forKey: "mn")
++        encoder.encodeInt64(self.mediaId.id, forKey: "mi")
++        if let size = self.size {
++            encoder.encodeInt64(size, forKey: "s64")
++        } else {
++            encoder.encodeNil(forKey: "s64")
++        }
++    }
++
++    public var id: MediaResourceId {
++        return MediaResourceId("tgteam-protected-copy-\(self.copyId)")
++    }
++
++    public func isEqual(to: MediaResource) -> Bool {
++        if let to = to as? TgTeamProtectedCopyMediaResource {
++            return self.copyId == to.copyId
++        } else {
++            return false
++        }
++    }
++}
++
++
++func tgteamFetchProtectedCopy(postbox: Postbox, resource: TgTeamProtectedCopyMediaResource) -> Signal<MediaResourceDataFetchResult, MediaResourceDataFetchError> {
++    return postbox.transaction { transaction -> Message? in
++        return transaction.getMessage(resource.messageId)
++    }
++    |> castError(MediaResourceDataFetchError.self)
++    |> mapToSignal { message -> Signal<MediaResourceDataFetchResult, MediaResourceDataFetchError> in
++        // The post may have been edited and its media replaced since the copy
++        // was made: then its current media is taken.
++        guard let message, let media = message.media.first(where: { $0.id == resource.mediaId }) ?? message.media.first(where: { $0 is TelegramMediaImage || $0 is TelegramMediaFile }) else {
++            return .fail(.generic)
++        }
++        let original: MediaResource
++        let reference: MediaResourceReference
++        let contentType: MediaResourceUserContentType
++        if let image = media as? TelegramMediaImage, let largest = largestImageRepresentation(image.representations) {
++            original = largest.resource
++            reference = ImageMediaReference.message(message: MessageReference(message), media: image).resourceReference(largest.resource)
++            contentType = .image
++        } else if let file = media as? TelegramMediaFile {
++            original = file.resource
++            reference = FileMediaReference.message(message: MessageReference(message), media: file).resourceReference(file.resource)
++            contentType = MediaResourceUserContentType(file: file)
++        } else {
++            return .fail(.generic)
++        }
++        let mediaBox = postbox.mediaBox
++        return Signal { subscriber in
++            let fetchDisposable = fetchedMediaResource(mediaBox: mediaBox, userLocation: .peer(message.id.peerId), userContentType: contentType, reference: reference, continueInBackground: true).startStrict(error: { _ in
++                subscriber.putError(.generic)
++            })
++            let progressDisposable = mediaBox.resourceStatus(original).startStrict(next: { status in
++                if case let .Fetching(_, progress) = status {
++                    subscriber.putNext(.progressUpdated(progress))
++                }
++            })
++            let dataDisposable = (mediaBox.resourceData(original)
++            |> filter { $0.complete }
++            |> take(1)).startStrict(next: { data in
++                // A hard link costs nothing even for a big video; a copy is
++                // the fallback. If neither works, the send fails visibly
++                // instead of hanging in "sending" forever.
++                let file = TempBox.shared.tempFile(fileName: "tgteam-copy")
++                unlink(file.path)
++                if link(data.path, file.path) != 0 {
++                    do {
++                        try FileManager.default.copyItem(atPath: data.path, toPath: file.path)
++                    } catch {
++                        subscriber.putError(.generic)
++                        return
++                    }
++                }
++                subscriber.putNext(.moveTempFile(file: file))
++                subscriber.putCompletion()
++            })
++            return ActionDisposable {
++                fetchDisposable.dispose()
++                progressDisposable.dispose()
++                dataDisposable.dispose()
++            }
++        }
++    }
++}
++
++func tgteamReplaceProtectedForwards(account: Account, messages: [EnqueueMessage]) -> Signal<[EnqueueMessage], NoError> {
++    var sources: [MessageId] = []
++    for message in messages {
++        if case let .forward(source, _, _, _, _) = message {
++            sources.append(source)
++        }
++    }
++    if sources.isEmpty {
++        return .single(messages)
++    }
++    return account.postbox.transaction { transaction -> [EnqueueMessage] in
++        var protected: [MessageId: Message] = [:]
++        for id in sources {
++            if let message = transaction.getMessage(id), message.tgteamNeedsProtectedCopy {
++                protected[id] = message
++            }
++        }
++        if protected.isEmpty {
++            return messages
++        }
++        var captionLimit = 1024
++        if let user = transaction.getPeer(account.peerId) as? TelegramUser, user.flags.contains(.isPremium) {
++            captionLimit = 4096
++        }
++
++        var groupingKeys: [Int64: Int64] = [:]
++        var result: [EnqueueMessage] = []
++        var pendingTexts: [EnqueueMessage] = []
++        var currentGroup: Int64?
++        for message in messages {
++            var copy = (message: message as EnqueueMessage?, trailingText: nil as EnqueueMessage?)
++            if case let .forward(source, threadId, grouping, attributes, correlationId) = message, let original = protected[source] {
++                var localGroupingKey: Int64?
++                if case .auto = grouping, let key = original.groupingKey {
++                    if let mapped = groupingKeys[key] {
++                        localGroupingKey = mapped
++                    } else {
++                        let mapped = Int64.random(in: Int64.min ... Int64.max)
++                        groupingKeys[key] = mapped
++                        localGroupingKey = mapped
++                    }
++                }
++                copy = tgteamCopyMessage(forward: message, original: original, threadId: threadId, attributes: attributes, localGroupingKey: localGroupingKey, correlationId: correlationId, captionLimit: captionLimit)
++            }
++            guard let enqueued = copy.message else {
++                continue
++            }
++            // A text that can't stay a caption goes right after its album.
++            let group = enqueued.groupingKey
++            if group == nil || group != currentGroup {
++                result.append(contentsOf: pendingTexts)
++                pendingTexts.removeAll()
++            }
++            currentGroup = group
++            result.append(enqueued)
++            if let trailingText = copy.trailingText {
++                pendingTexts.append(trailingText)
++            }
++        }
++        result.append(contentsOf: pendingTexts)
++        return result
++    }
++}
++
++private func tgteamCopyMessage(forward: EnqueueMessage, original: Message, threadId: Int64?, attributes: [MessageAttribute], localGroupingKey: Int64?, correlationId: Int64?, captionLimit: Int) -> (message: EnqueueMessage?, trailingText: EnqueueMessage?) {
++    var hideCaptions = false
++    var outgoingAttributes: [MessageAttribute] = []
++    for attribute in attributes {
++        if let attribute = attribute as? ForwardOptionsMessageAttribute {
++            hideCaptions = attribute.hideCaptions
++        } else {
++            outgoingAttributes.append(attribute)
++        }
++    }
++
++    func build(text: String, entities: TextEntitiesMessageAttribute?, media: Media?, spoiler: Bool, invertMedia: Bool, groupingKey: Int64?, correlationId: Int64?) -> EnqueueMessage {
++        var messageAttributes = outgoingAttributes
++        if let entities {
++            messageAttributes.append(entities)
++        }
++        if spoiler {
++            messageAttributes.append(MediaSpoilerMessageAttribute())
++        }
++        if invertMedia {
++            messageAttributes.append(InvertMediaMessageAttribute())
++        }
++        return .message(text: text, attributes: messageAttributes, inlineStickers: [:], mediaReference: media.flatMap { AnyMediaReference.standalone(media: $0) }, threadId: threadId, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: groupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: [])
++    }
++
++    let entities = original.attributes.first(where: { $0 is TextEntitiesMessageAttribute }) as? TextEntitiesMessageAttribute
++    let invertMedia = original.attributes.contains(where: { $0 is InvertMediaMessageAttribute })
++    let text = original.text
++
++    guard let media = original.media.first(where: { $0 is TelegramMediaImage || $0 is TelegramMediaFile }) else {
++        // Contacts and fixed places carry no files and go as they are. A live
++        // location is not copied: its copy would start broadcasting where the
++        // sender is right now. Dice would be thrown anew, polls and link
++        // previews are rebuilt by the server from the text alone.
++        let plain = original.media.first(where: { media in
++            if media is TelegramMediaContact {
++                return true
++            } else if let map = media as? TelegramMediaMap {
++                return map.liveBroadcastingTimeout == nil
++            } else {
++                return false
++            }
++        })
++        if plain == nil && text.isEmpty {
++            // Nothing to copy: the usual forward fails visibly instead of
++            // the message disappearing without a trace.
++            return (forward, nil)
++        }
++        return (build(text: text, entities: entities, media: plain, spoiler: false, invertMedia: false, groupingKey: nil, correlationId: correlationId), nil)
++    }
++
++    let captionText = hideCaptions ? "" : text
++    let captionEntities = hideCaptions ? nil : entities
++    let spoiler = original.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute })
++
++    // Round videos and stickers can't have a caption, and a caption over
++    // the limit would be refused.
++    var separateText = false
++    if !captionText.isEmpty {
++        if let file = media as? TelegramMediaFile, file.isInstantVideo || file.isSticker {
++            separateText = true
++        } else if (captionText as NSString).length > captionLimit {
++            separateText = true
++        }
++    }
++    let trailingText: EnqueueMessage? = separateText ? build(text: captionText, entities: captionEntities, media: nil, spoiler: false, invertMedia: false, groupingKey: nil, correlationId: nil) : nil
++
++    // A sticker belongs to its set, not to the protected post: it goes as is,
++    // referenced through its set rather than through the post.
++    if let file = media as? TelegramMediaFile, file.isSticker {
++        var sticker = file
++        for attribute in file.attributes {
++            if case let .Sticker(_, packReference, _) = attribute, let packReference {
++                sticker = file.withUpdatedPartialReference(.stickerPack(stickerPack: packReference))
++            }
++        }
++        return (build(text: "", entities: nil, media: sticker, spoiler: false, invertMedia: false, groupingKey: nil, correlationId: correlationId), trailingText)
++    }
++
++    guard let copied = tgteamCopyMedia(original: original, media: media) else {
++        return (forward, nil)
++    }
++    if separateText {
++        return (build(text: "", entities: nil, media: copied, spoiler: spoiler, invertMedia: false, groupingKey: localGroupingKey, correlationId: correlationId), trailingText)
++    } else {
++        return (build(text: captionText, entities: captionEntities, media: copied, spoiler: spoiler, invertMedia: invertMedia, groupingKey: localGroupingKey, correlationId: correlationId), nil)
++    }
++}
++
++// A new local media whose bytes come from the original on demand.
++private func tgteamCopyMedia(original: Message, media: Media) -> Media? {
++    let copyId = Int64.random(in: Int64.min ... Int64.max)
++    if let image = media as? TelegramMediaImage {
++        guard let largest = largestImageRepresentation(image.representations) else {
++            return nil
++        }
++        // No size here: with a known size the bubble would count progress
++        // against it and stay at zero while the original is downloading.
++        let resource = TgTeamProtectedCopyMediaResource(copyId: copyId, messageId: original.id, mediaId: image.imageId, size: nil)
++        return TelegramMediaImage(imageId: MediaId(namespace: Namespaces.Media.LocalImage, id: copyId), representations: [TelegramMediaImageRepresentation(dimensions: largest.dimensions, resource: resource, progressiveSizes: [], immediateThumbnailData: nil)], immediateThumbnailData: image.immediateThumbnailData, reference: nil, partialReference: nil, flags: [])
++    } else if let file = media as? TelegramMediaFile {
++        let resource = TgTeamProtectedCopyMediaResource(copyId: copyId, messageId: original.id, mediaId: file.fileId, size: nil)
++        return TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: copyId), partialReference: nil, resource: resource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: file.immediateThumbnailData, mimeType: file.mimeType, size: file.size, attributes: file.attributes, alternativeRepresentations: [])
++    } else {
++        return nil
++    }
++}
+diff --git a/submodules/TelegramCore/Sources/State/Fetch.swift b/submodules/TelegramCore/Sources/State/Fetch.swift
+index bdc2ef90..6f96e291 100644
+--- a/submodules/TelegramCore/Sources/State/Fetch.swift
++++ b/submodules/TelegramCore/Sources/State/Fetch.swift
+@@ -133,6 +133,8 @@ func fetchResource(
+                 parameters: parameters
+             ))
+         }
++    } else if let copyResource = resource as? TgTeamProtectedCopyMediaResource {
++        return tgteamFetchProtectedCopy(postbox: postbox, resource: copyResource)
+     } else if let localFileResource = resource as? LocalFileReferenceMediaResource {
+         return fetchLocalFileResource(path: localFileResource.localFilePath, move: localFileResource.isUniquelyReferencedTemporaryFile)
+         |> castError(MediaResourceDataFetchError.self)
+diff --git a/submodules/TelegramCore/Sources/TelegramEngine/Data/PeersData.swift b/submodules/TelegramCore/Sources/TelegramEngine/Data/PeersData.swift
+index 967786ba..6cbf506a 100644
+--- a/submodules/TelegramCore/Sources/TelegramEngine/Data/PeersData.swift
++++ b/submodules/TelegramCore/Sources/TelegramEngine/Data/PeersData.swift
+@@ -2393,12 +2393,8 @@ public extension TelegramEngine.EngineData.Item {
+                 }
+                 if let cachedPeerData = view.cachedData as? CachedUserData {
+                     return cachedPeerData.flags.contains(.copyProtectionEnabled)
+-                } else if let group = peer as? TelegramGroup {
+-                    return group.flags.contains(.copyProtectionEnabled)
+-                } else if let channel = peer as? TelegramChannel {
+-                    return channel.flags.contains(.copyProtectionEnabled)
+                 } else {
+-                    return false
++                    return peer.isCopyProtectionEnabled
+                 }
+             }
+         }
+diff --git a/submodules/TelegramCore/Sources/Utils/MessageUtils.swift b/submodules/TelegramCore/Sources/Utils/MessageUtils.swift
+index b7c6ae8c..a698a669 100644
+--- a/submodules/TelegramCore/Sources/Utils/MessageUtils.swift
++++ b/submodules/TelegramCore/Sources/Utils/MessageUtils.swift
+@@ -535,9 +535,28 @@ public extension Message {
+         }
+     }
+     
+-    func isCopyProtected() -> Bool {
++    // TgTeam: protected, but unlocked in this build. The server still
++    // refuses to forward it, so it is sent as a copy instead.
++    var tgteamNeedsProtectedCopy: Bool {
++        guard let peer = self.peers[self.id.peerId], peer.tgteamProtectedContentUnlocked else {
++            return false
++        }
+         if self.flags.contains(.CopyProtected) {
+             return true
++        } else if let group = peer as? TelegramGroup {
++            return group.flags.contains(.copyProtectionEnabled)
++        } else if let channel = peer as? TelegramChannel {
++            return channel.flags.contains(.copyProtectionEnabled)
++        } else {
++            return false
++        }
++    }
++
++    func isCopyProtected() -> Bool {
++        if let peer = self.peers[self.id.peerId], peer.tgteamProtectedContentUnlocked {
++            return false
++        } else if self.flags.contains(.CopyProtected) {
++            return true
+         } else if let group = self.peers[self.id.peerId] as? TelegramGroup, group.flags.contains(.copyProtectionEnabled) {
+             return true
+         } else if let channel = self.peers[self.id.peerId] as? TelegramChannel, channel.flags.contains(.copyProtectionEnabled) {
+diff --git a/submodules/TelegramCore/Sources/Utils/PeerUtils.swift b/submodules/TelegramCore/Sources/Utils/PeerUtils.swift
+index 26cebdb4..4546b727 100644
+--- a/submodules/TelegramCore/Sources/Utils/PeerUtils.swift
++++ b/submodules/TelegramCore/Sources/Utils/PeerUtils.swift
+@@ -251,7 +251,23 @@ public extension Peer {
+         }
+     }
+     
++    // TgTeam: this build is for our own team, so protected content of any
++    // channel or group is unlocked - it can be saved and forwarded as a
++    // copy. The setting itself is shown and changed by reading the raw flag
++    // (ChannelVisibilityController), so it stays untouched.
++    var tgteamProtectedContentUnlocked: Bool {
++        switch self {
++        case is TelegramGroup, is TelegramChannel:
++            return true
++        default:
++            return false
++        }
++    }
++
+     var isCopyProtectionEnabled: Bool {
++        if self.tgteamProtectedContentUnlocked {
++            return false
++        }
+         switch self {
+         case let group as TelegramGroup:
+             return group.flags.contains(.copyProtectionEnabled)
+diff --git a/submodules/TelegramUI/Sources/Chat/ChatControllerQuickShare.swift b/submodules/TelegramUI/Sources/Chat/ChatControllerQuickShare.swift
+index 33ae49c2..c08e255b 100644
+--- a/submodules/TelegramUI/Sources/Chat/ChatControllerQuickShare.swift
++++ b/submodules/TelegramUI/Sources/Chat/ChatControllerQuickShare.swift
+@@ -33,23 +33,34 @@ extension ChatControllerImpl {
+                         case .info:
+                             self.openPeer(peer: peer, navigation: .chat(textInputState: nil, subject: nil, peekData: nil), fromMessage: nil)
+                         case .commit:
+-                            let enqueueMessage = StandaloneSendEnqueueMessage(
+-                                content: .forward(forward: StandaloneSendEnqueueMessage.Forward(
+-                                    sourceId: id,
+-                                    threadId: nil
+-                                )),
+-                                replyToMessageId: nil
+-                            )
+-                            let _ = (standaloneSendEnqueueMessages(
+-                                accountPeerId: self.context.account.peerId,
+-                                postbox: self.context.account.postbox,
+-                                network: self.context.account.network,
+-                                stateManager: self.context.account.stateManager,
+-                                auxiliaryMethods: self.context.account.auxiliaryMethods,
+-                                peerId: peer.id,
+-                                threadId: nil,
+-                                messages: [enqueueMessage]
+-                            )).startStandalone()
++                            // TgTeam: a protected post, unlocked in this
++                            // build, goes as a copy: the standalone forward
++                            // below would be refused by the server.
++                            let context = self.context
++                            let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Messages.Message(id: id))
++                            |> deliverOnMainQueue).startStandalone(next: { message in
++                                if let message, message._asMessage().tgteamNeedsProtectedCopy {
++                                    let _ = enqueueMessages(account: context.account, peerId: peer.id, messages: [.forward(source: id, threadId: nil, grouping: .auto, attributes: [], correlationId: nil)]).startStandalone()
++                                    return
++                                }
++                                let enqueueMessage = StandaloneSendEnqueueMessage(
++                                    content: .forward(forward: StandaloneSendEnqueueMessage.Forward(
++                                        sourceId: id,
++                                        threadId: nil
++                                    )),
++                                    replyToMessageId: nil
++                                )
++                                let _ = (standaloneSendEnqueueMessages(
++                                    accountPeerId: context.account.peerId,
++                                    postbox: context.account.postbox,
++                                    network: context.account.network,
++                                    stateManager: context.account.stateManager,
++                                    auxiliaryMethods: context.account.auxiliaryMethods,
++                                    peerId: peer.id,
++                                    threadId: nil,
++                                    messages: [enqueueMessage]
++                                )).startStandalone()
++                            })
+                         }
+                     }
+                 )
+-- 
+2.52.0.windows.1
+

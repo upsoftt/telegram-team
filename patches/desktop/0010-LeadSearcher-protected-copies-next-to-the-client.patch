@@ -1,0 +1,207 @@
+From c6ff2ccd5b0559956b2e32969ebad3ed85c206fc Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Mon, 5 Oct 2026 22:54:52 +0300
+Subject: [PATCH 10/12] LeadSearcher: protected copies kept next to the client,
+ removed once sent
+
+Copies of protected posts went to %TEMP%\TelegramTeam\copies and stayed a day:
+05.10.2026 a copied course left 29 GB there with 9 GB free on C:. They now lie
+in <working dir>\protected_copies, and a job removes its files as soon as
+everything is sent. Files of a timed out send, and the old %TEMP% folder, are
+swept a day later as before.
+---
+ .../SourceFiles/api/api_protected_copy.cpp    | 97 ++++++++++++++++---
+ 1 file changed, 86 insertions(+), 11 deletions(-)
+
+diff --git a/Telegram/SourceFiles/api/api_protected_copy.cpp b/Telegram/SourceFiles/api/api_protected_copy.cpp
+index d4b62bdb74..fefa6c3496 100644
+--- a/Telegram/SourceFiles/api/api_protected_copy.cpp
++++ b/Telegram/SourceFiles/api/api_protected_copy.cpp
+@@ -49,8 +49,9 @@ constexpr auto kAppearTimeout = crl::time(60 * 1000);
+ constexpr auto kSendTimeout = crl::time(30 * 60 * 1000);
+ // A download is given up only when it stops moving, not by its length.
+ constexpr auto kStallTimeout = crl::time(5 * 60 * 1000);
+-// Uploads read the files lazily, so copies are kept for a day and removed
+-// on the next copy after that.
++// A job removes its files once everything is sent. What it could not remove
++// (a send that timed out, a file still open, a client that quit midway) is
++// swept on the next copy, a day later: uploads read the files lazily.
+ constexpr auto kKeepCopiesSeconds = 24 * 60 * 60;
+ constexpr auto kPreviewWidth = 308;
+ 
+@@ -99,22 +100,48 @@ void ShowToast(const QString &text) {
+ 	}
+ }
+ 
++// Copies lie next to the client's own data and not in %TEMP%: a copied
++// course is tens of gigabytes a day, and the system disk is usually the
++// smallest one (05.10.2026 it held 29 GB of copies with 9 GB left free).
+ [[nodiscard]] QString CopiesRoot() {
++	return cWorkingDir() + u"protected_copies"_q;
++}
++
++// Where copies were kept before, swept the same way until it is empty.
++[[nodiscard]] QString LegacyCopiesRoot() {
+ 	return QDir::tempPath() + u"/TelegramTeam/copies"_q;
+ }
+ 
+ void RemoveOldCopies() {
+-	const auto root = CopiesRoot();
+ 	const auto border = QDateTime::currentDateTime().addSecs(
+ 		-kKeepCopiesSeconds);
+-	auto dirs = QDir(root).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+-	for (const auto &info : dirs) {
+-		if (info.lastModified() < border) {
+-			QDir(info.absoluteFilePath()).removeRecursively();
++	for (const auto &root : { CopiesRoot(), LegacyCopiesRoot() }) {
++		auto dirs = QDir(root).entryInfoList(
++			QDir::Dirs | QDir::NoDotAndDotDot);
++		for (const auto &info : dirs) {
++			if (info.lastModified() < border) {
++				QDir(info.absoluteFilePath()).removeRecursively();
++			}
+ 		}
+ 	}
+ }
+ 
++// Every copy has a folder of its own right inside the root (MakeCopyPath),
++// so the folder goes together with the file. Anything else is left alone:
++// a document already saved by the user is reused as is and isn't ours.
++void RemoveCopy(const QString &path) {
++	if (path.isEmpty()) {
++		return;
++	}
++	const auto folder = QFileInfo(path).absolutePath();
++	const auto parent = QFileInfo(folder).absolutePath();
++	if (QDir::cleanPath(parent).compare(
++			QDir::cleanPath(CopiesRoot()),
++			Qt::CaseInsensitive) == 0) {
++		QDir(folder).removeRecursively();
++	}
++}
++
+ [[nodiscard]] QString SafeFileName(QString name) {
+ 	static const auto bad = QString(u"\\/:*?\"<>|"_q);
+ 	for (auto &ch : name) {
+@@ -290,6 +317,7 @@ public:
+ 		bool dropCaptions);
+ 
+ 	void start();
++	[[nodiscard]] bool usesPath(const QString &path) const;
+ 
+ private:
+ 	enum class State {
+@@ -325,6 +353,8 @@ private:
+ 	float64 _lastProgress = -1.;
+ 	crl::time _lastProgressAt = 0;
+ 	bool _addedSinceSend = false;
++	// A send was given up by time and may still be reading its file.
++	bool _timedOut = false;
+ 	rpl::lifetime _lifetime;
+ 
+ };
+@@ -349,6 +379,19 @@ void RemoveJob(uint64 id) {
+ 	}
+ }
+ 
++// Copies into several chats at once share one downloaded file
++// (StartDocumentSave), so a file goes only when no other job needs it.
++void RemoveFinishedCopies(const std::vector<QString> &paths) {
++	for (const auto &path : paths) {
++		const auto used = ranges::any_of(Jobs(), [&](const auto &job) {
++			return job->usesPath(path);
++		});
++		if (!used) {
++			RemoveCopy(path);
++		}
++	}
++}
++
+ CopyJob::CopyJob(
+ 	uint64 id,
+ 	std::vector<not_null<HistoryItem*>> items,
+@@ -403,6 +446,18 @@ void CopyJob::start() {
+ 	sendNext();
+ }
+ 
++bool CopyJob::usesPath(const QString &path) const {
++	for (const auto &unit : _units) {
++		for (const auto &part : unit.parts) {
++			if (!part.path.isEmpty()
++				&& part.path.compare(path, Qt::CaseInsensitive) == 0) {
++				return true;
++			}
++		}
++	}
++	return false;
++}
++
+ void CopyJob::startLoading(Part &part) {
+ 	const auto origin = Data::FileOrigin(part.itemId);
+ 	if (part.photo) {
+@@ -484,6 +539,7 @@ void CopyJob::tick() {
+ 			_lastProgress = progress;
+ 			_lastProgressAt = now;
+ 		} else if (now - _lastProgressAt >= kStallTimeout) {
++			_timedOut = true;
+ 			for (auto &part : _units[_next].parts) {
+ 				if (!part.ready) {
+ 					part.failed = true;
+@@ -498,8 +554,10 @@ void CopyJob::tick() {
+ 		}
+ 		break;
+ 	case State::WaitSent:
+-		if (!_history->latestSendingMessage()
+-			|| (now - _stateStarted >= kSendTimeout)) {
++		if (!_history->latestSendingMessage()) {
++			sendNext();
++		} else if (now - _stateStarted >= kSendTimeout) {
++			_timedOut = true;
+ 			sendNext();
+ 		}
+ 		break;
+@@ -509,12 +567,15 @@ void CopyJob::tick() {
+ 		if (_session->uploadsInProgress()) {
+ 			setState(State::WaitUploadEnd);
+ 		} else if (now - _stateStarted >= kAppearTimeout) {
++			_timedOut = true;
+ 			sendNext();
+ 		}
+ 		break;
+ 	case State::WaitUploadEnd:
+-		if (!_session->uploadsInProgress()
+-			|| (now - _stateStarted >= kSendTimeout)) {
++		if (!_session->uploadsInProgress()) {
++			sendNext();
++		} else if (now - _stateStarted >= kSendTimeout) {
++			_timedOut = true;
+ 			sendNext();
+ 		}
+ 		break;
+@@ -669,9 +730,23 @@ void CopyJob::finish() {
+ 			u"Не удалось скопировать сообщений: %1."_q,
+ 			u"Could not copy %1 message(s)."_q).arg(_failed));
+ 	}
++	// Everything is sent here, so the files are needed no more. After a
++	// timeout an upload may still be reading them: the day-old sweep
++	// (RemoveOldCopies) takes those.
++	auto paths = std::vector<QString>();
++	if (!_timedOut) {
++		for (const auto &unit : _units) {
++			for (const auto &part : unit.parts) {
++				if (!part.path.isEmpty()) {
++					paths.push_back(part.path);
++				}
++			}
++		}
++	}
+ 	const auto id = _id;
+ 	crl::on_main([=] {
+ 		RemoveJob(id);
++		RemoveFinishedCopies(paths);
+ 	});
+ }
+ 
+-- 
+2.52.0.windows.1
+

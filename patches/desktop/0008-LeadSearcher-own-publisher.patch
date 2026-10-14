@@ -1,7 +1,7 @@
-From 4d15ce760118eec2e28cc6d269e968cf6464ba91 Mon Sep 17 00:00:00 2001
+From 06f8d7e66a1e9681170dae8c0b553a4862a30cfe Mon Sep 17 00:00:00 2001
 From: upsoft <13884634+upsoftt@users.noreply.github.com>
 Date: Mon, 24 Aug 2026 04:53:05 +0300
-Subject: [PATCH] LeadSearcher: own publisher in file properties
+Subject: [PATCH 08/12] LeadSearcher: own publisher in file properties
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -14,7 +14,7 @@ FZ-LLC и упоминание GPLv3 остаются, этого требует
  1 file changed, 4 insertions(+), 4 deletions(-)
 
 diff --git a/Telegram/Resources/winrc/Telegram.rc b/Telegram/Resources/winrc/Telegram.rc
-index e4e9a5b25b..8820b00a40 100644
+index 62080c78d8..db49b3e416 100644
 --- a/Telegram/Resources/winrc/Telegram.rc
 +++ b/Telegram/Resources/winrc/Telegram.rc
 @@ -60,11 +60,11 @@ BEGIN
@@ -25,12 +25,12 @@ index e4e9a5b25b..8820b00a40 100644
 -            VALUE "FileDescription", "Telegram Desktop"
 +            VALUE "CompanyName", "Telegram Team (unofficial build)"
 +            VALUE "FileDescription", "Telegram Team"
-             VALUE "FileVersion", "7.1.1.0"
+             VALUE "FileVersion", "7.3.1.0"
 -            VALUE "LegalCopyright", "Copyright (C) 2014-2026"
 -            VALUE "ProductName", "Telegram Desktop"
 +            VALUE "LegalCopyright", "Copyright (C) 2014-2026 Telegram FZ-LLC, GPLv3"
 +            VALUE "ProductName", "Telegram Team"
-             VALUE "ProductVersion", "7.1.1.0"
+             VALUE "ProductVersion", "7.3.1.0"
          END
      END
 -- 

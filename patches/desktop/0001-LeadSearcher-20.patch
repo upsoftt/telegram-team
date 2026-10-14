@@ -1,13 +1,13 @@
-From 0e5739db304e10a622a37028705375d538a71ace Mon Sep 17 00:00:00 2001
+From 9522fd2fcc4bfcfbc145bc77dddaac98fbefbd72 Mon Sep 17 00:00:00 2001
 From: upsoft <13884634+upsoftt@users.noreply.github.com>
 Date: Tue, 28 Jul 2026 03:10:47 +0300
-Subject: =?UTF-8?q?LeadSearcher:=20=D1=81=D0=B2=D0=BE=D0=B9=20=D0=BA=D0=BB?=
- =?UTF-8?q?=D0=B8=D0=B5=D0=BD=D1=82,=2020=20=D0=B0=D0=BA=D0=BA=D0=B0=D1=83?=
- =?UTF-8?q?=D0=BD=D1=82=D0=BE=D0=B2=20=D0=B8=20=D0=BF=D0=B5=D1=80=D0=B5?=
- =?UTF-8?q?=D1=85=D0=BE=D0=B4=20=D0=BA=20=D1=81=D0=B8=D0=B3=D0=BD=D0=B0?=
- =?UTF-8?q?=D0=BB=D1=83=20=D0=BF=D0=BE=D0=B4=20=D0=BD=D1=83=D0=B6=D0=BD?=
- =?UTF-8?q?=D1=8B=D0=BC=20=D0=B0=D0=BA=D0=BA=D0=B0=D1=83=D0=BD=D1=82=D0=BE?=
- =?UTF-8?q?=D0=BC?=
+Subject: [PATCH 01/12] =?UTF-8?q?LeadSearcher:=20=D1=81=D0=B2=D0=BE=D0=B9?=
+ =?UTF-8?q?=20=D0=BA=D0=BB=D0=B8=D0=B5=D0=BD=D1=82,=2020=20=D0=B0=D0=BA?=
+ =?UTF-8?q?=D0=BA=D0=B0=D1=83=D0=BD=D1=82=D0=BE=D0=B2=20=D0=B8=20=D0=BF?=
+ =?UTF-8?q?=D0=B5=D1=80=D0=B5=D1=85=D0=BE=D0=B4=20=D0=BA=20=D1=81=D0=B8?=
+ =?UTF-8?q?=D0=B3=D0=BD=D0=B0=D0=BB=D1=83=20=D0=BF=D0=BE=D0=B4=20=D0=BD?=
+ =?UTF-8?q?=D1=83=D0=B6=D0=BD=D1=8B=D0=BC=20=D0=B0=D0=BA=D0=BA=D0=B0=D1=83?=
+ =?UTF-8?q?=D0=BD=D1=82=D0=BE=D0=BC?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -22,10 +22,10 @@ Content-Transfer-Encoding: 8bit
  6 files changed, 87 insertions(+), 22 deletions(-)
 
 diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
-index 1567c97ab4..841f81675b 100644
+index 811707d7fd..fd299f9659 100644
 --- a/Telegram/CMakeLists.txt
 +++ b/Telegram/CMakeLists.txt
-@@ -2348,7 +2348,9 @@ else()
+@@ -2556,7 +2556,9 @@ else()
          set(bundle_identifier "com.tdesktop.Telegram")
      endif()
      set(bundle_entitlements "Telegram.entitlements")
@@ -37,10 +37,10 @@ index 1567c97ab4..841f81675b 100644
  
  if (CMAKE_GENERATOR STREQUAL Xcode)
 diff --git a/Telegram/SourceFiles/core/application.cpp b/Telegram/SourceFiles/core/application.cpp
-index 8a41ca5410..f13295c50c 100644
+index 7a309ac843..7c5bb01bc3 100644
 --- a/Telegram/SourceFiles/core/application.cpp
 +++ b/Telegram/SourceFiles/core/application.cpp
-@@ -102,6 +102,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+@@ -104,6 +104,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
  
  #include <QtCore/QStandardPaths>
  #include <QtCore/QMimeDatabase>
@@ -48,7 +48,7 @@ index 8a41ca5410..f13295c50c 100644
  #include <QtGui/QGuiApplication>
  #include <QtGui/QScreen>
  
-@@ -1201,8 +1202,67 @@ bool Application::canApplyLangPackWithoutRestart() const {
+@@ -1218,8 +1219,67 @@ bool Application::canApplyLangPackWithoutRestart() const {
  	return true;
  }
  
@@ -116,7 +116,7 @@ index 8a41ca5410..f13295c50c 100644
  		return;
  	}
  	if (!Core::App().passcodeLocked()) {
-@@ -2034,23 +2094,15 @@ void Application::RegisterUrlScheme() {
+@@ -2074,23 +2134,15 @@ void Application::RegisterUrlScheme() {
  		? u"-workdir \"%1\""_q.arg(cWorkingDir())
  		: QString();
  
@@ -147,7 +147,7 @@ index 8a41ca5410..f13295c50c 100644
  		.displayAppName = AppName.utf16(),
  		.displayAppDescription = AppName.utf16(),
 diff --git a/Telegram/SourceFiles/core/application.h b/Telegram/SourceFiles/core/application.h
-index ada2cf5f1a..f7cd41766f 100644
+index e92e068100..e3af5b72c9 100644
 --- a/Telegram/SourceFiles/core/application.h
 +++ b/Telegram/SourceFiles/core/application.h
 @@ -289,6 +289,10 @@ public:
@@ -162,7 +162,7 @@ index ada2cf5f1a..f7cd41766f 100644
  	bool openInternalUrl(const QString &url, QVariant context);
  	[[nodiscard]] QString changelogLink() const;
 diff --git a/Telegram/SourceFiles/core/version.h b/Telegram/SourceFiles/core/version.h
-index cc2354e7ba..fea8fd514a 100644
+index 2de2881183..fa76e5f1c5 100644
 --- a/Telegram/SourceFiles/core/version.h
 +++ b/Telegram/SourceFiles/core/version.h
 @@ -18,10 +18,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -178,14 +178,14 @@ index cc2354e7ba..fea8fd514a 100644
 -constexpr auto AppFile = "Telegram"_cs;
 +constexpr auto AppName = "Telegram Team"_cs;
 +constexpr auto AppFile = "TelegramTeam"_cs;
- constexpr auto AppVersion = 7001001;
- constexpr auto AppVersionStr = "7.1.1";
+ constexpr auto AppVersion = 7003001;
+ constexpr auto AppVersionStr = "7.3.1";
  constexpr auto AppBetaVersion = false;
 diff --git a/Telegram/SourceFiles/main/main_domain.h b/Telegram/SourceFiles/main/main_domain.h
-index 99e2c9d5b3..9245205381 100644
+index 7f85abc8fd..c2836a785e 100644
 --- a/Telegram/SourceFiles/main/main_domain.h
 +++ b/Telegram/SourceFiles/main/main_domain.h
-@@ -31,8 +31,11 @@ public:
+@@ -36,8 +36,11 @@ public:
  		std::unique_ptr<Account> account;
  	};
  

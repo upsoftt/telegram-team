@@ -1,7 +1,7 @@
 # Сборка под iPhone
 
 Собирается из оригинальных исходников `TelegramMessenger/Telegram-iOS`; патчи из
-`patches/ios` накатываются поверх апстрима — они сняты с версии **12.9.2**, на более
+`patches/ios` накатываются поверх апстрима — они сняты с ветки **`release-13.0.0`**, на более
 свежей апстримной версии часть контекста может не совпасть и патчи придётся перевыпустить. Нужен Mac с Xcode — других вариантов нет,
 сборка идёт через Bazel и подписывается системными средствами Apple.
 
@@ -39,7 +39,7 @@ scripts/mac/run-build.sh <номер сборки>
 Полная команда, которую он выполняет:
 
 ```sh
-python3 build-system/Make/Make.py --cacheDir="$HOME/telegram-bazel-cache" build \
+python3 build-system/Make/Make.py --overrideXcodeVersion --cacheDir="$HOME/telegram-bazel-cache" build \
   --configurationPath=build-system/<своё имя>-configuration.json \
   --buildNumber=<N> --configuration=release_arm64 \
   --codesigningInformationPath="$HOME/<каталог с профилями>"
@@ -96,6 +96,9 @@ codesign -dv "$APP" 2>&1 | grep -E "Identifier|TeamIdentifier"
 | Лимит аккаунтов не поднялся, хотя константа изменена | числа продублированы прямо в коде трёх экранов. Проверять `grep -rn maximumAvailableAccounts` |
 | Иконку приложения нельзя вернуть после выбора другой | первая плитка помечается основной только для сборок App Store (`isDefault: buildConfig.isAppStoreBuild`), а сброс делается только выбором основной |
 | Ожидание конца сборки не срабатывает | `pgrep -f "Make.py"` находит сам себя, если строка есть в командной строке ждущего цикла. Ждать по файлу-признаку |
+| `cannot execute tool 'metal' due to missing Metal Toolchain` | с Telegram 13.0 в сборке есть шейдеры Metal, а Xcode 26 ставит их компилятор отдельной загрузкой: `xcodebuild -downloadComponent MetalToolchain`, около 700 МБ, один раз |
+| `wasi_sdk_macos/bin/clang++: Bad CPU type in executable` на `reference_core_wasm` | с 13.0 ядро звонков собирается в WebAssembly, и апстрим качает wasi-sdk только под процессоры Apple. На Intel-машине нужен архив `x86_64-macos` того же выпуска: это делает `patches/ios/0007`. На Mac с процессором Apple патч не нужен, его можно не накатывать |
+| Make.py останавливается на сверке версии Xcode | Telegram 13.0 объявляет Xcode 26.6; с более ранним Xcode сборка идёт с флагом `--overrideXcodeVersion` |
 | Ссылка своей схемы не открывает приложение | список схем берётся из `Telegram/BUILD` (`UrlTypesInfoPlist`), а `Telegram/Telegram-iOS/Info.plist` в сборке Bazel не участвует вовсе |
 
 ## Раздача

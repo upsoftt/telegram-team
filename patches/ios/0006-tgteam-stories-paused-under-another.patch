@@ -1,0 +1,37 @@
+From aaf6b6dddf1173cd3036f745752fce9763d3a3db Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 19:13:45 +0300
+Subject: [PATCH 6/6] =?UTF-8?q?TgTeam:=20=D0=BF=D1=80=D0=BE=D1=81=D0=BC?=
+ =?UTF-8?q?=D0=BE=D1=82=D1=80=20=D1=81=D1=82=D0=BE=D1=80=D0=B8=D0=B7=20?=
+ =?UTF-8?q?=D0=BF=D0=BE=D0=B4=20=D0=B4=D1=80=D1=83=D0=B3=D0=B8=D0=BC=20?=
+ =?UTF-8?q?=D0=BF=D1=80=D0=BE=D1=81=D0=BC=D0=BE=D1=82=D1=80=D0=BE=D0=BC=20?=
+ =?UTF-8?q?=D1=81=D1=82=D0=BE=D0=B8=D1=82=20=D0=BD=D0=B0=20=D0=BF=D0=B0?=
+ =?UTF-8?q?=D1=83=D0=B7=D0=B5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Из сториз открыли профиль, из профиля другие сториз того же человека: прежняя лента продолжала играть со звуком под новой. Проверка паузы смотрела, что сверху экран сториз, а не что это сама лента.
+---
+ .../Sources/StoryItemSetContainerComponent.swift             | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/submodules/TelegramUI/Components/Stories/StoryContainerScreen/Sources/StoryItemSetContainerComponent.swift b/submodules/TelegramUI/Components/Stories/StoryContainerScreen/Sources/StoryItemSetContainerComponent.swift
+index 9f94cc68..13203459 100644
+--- a/submodules/TelegramUI/Components/Stories/StoryContainerScreen/Sources/StoryItemSetContainerComponent.swift
++++ b/submodules/TelegramUI/Components/Stories/StoryContainerScreen/Sources/StoryItemSetContainerComponent.swift
+@@ -1475,7 +1475,10 @@ public final class StoryItemSetContainerComponent: Component {
+             }
+             if let controller = component.controller() as? StoryContainerScreen, let navigationController = controller.navigationController as? NavigationController {
+                 let topViewController = navigationController.topViewController
+-                if !(topViewController is StoryContainerScreen) && !(topViewController is MediaEditorScreen) && !(topViewController is ShareWithPeersScreen) && !(topViewController is AttachmentController) {
++                // Another story viewer on top (e.g. opened from a profile that was
++                // opened from this one) must pause this viewer as well, otherwise
++                // its video keeps playing sound behind the new one.
++                if topViewController !== controller && !(topViewController is MediaEditorScreen) && !(topViewController is ShareWithPeersScreen) && !(topViewController is AttachmentController) {
+                     return .pause
+                 }
+             }
+-- 
+2.52.0.windows.1
+

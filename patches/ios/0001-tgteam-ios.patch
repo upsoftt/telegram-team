@@ -1,7 +1,7 @@
-From 896a4325f8a9f814ec178197c0b7d2d81247e644 Mon Sep 17 00:00:00 2001
+From 2b9794b02b7176e4328a1dcdc601b8c528150b43 Mon Sep 17 00:00:00 2001
 From: upsoft <13884634+upsoftt@users.noreply.github.com>
 Date: Fri, 31 Jul 2026 03:21:38 +0300
-Subject: [PATCH] =?UTF-8?q?TgTeam:=20=D1=81=D0=B2=D0=BE=D0=B9=20=D0=BA?=
+Subject: [PATCH 1/6] =?UTF-8?q?TgTeam:=20=D1=81=D0=B2=D0=BE=D0=B9=20=D0=BA?=
  =?UTF-8?q?=D0=BB=D0=B8=D0=B5=D0=BD=D1=82=20=E2=80=94=2050=20=D0=B0=D0=BA?=
  =?UTF-8?q?=D0=BA=D0=B0=D1=83=D0=BD=D1=82=D0=BE=D0=B2,=20=D1=81=D0=B2?=
  =?UTF-8?q?=D0=BE=D1=8F=20=D0=B8=D0=BA=D0=BE=D0=BD=D0=BA=D0=B0,=20=D0=BA?=
@@ -76,10 +76,10 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 Telegram/Telegram-iOS/TgTeamAppIcon.xcassets/AppIcon.appiconset/Contents.json
 
 diff --git a/Telegram/BUILD b/Telegram/BUILD
-index 9ad13cf33f..4af26c4e5c 100644
+index fd73a6ae..9d612c66 100644
 --- a/Telegram/BUILD
 +++ b/Telegram/BUILD
-@@ -1777,7 +1777,7 @@ ios_application(
+@@ -1847,7 +1847,7 @@ ios_application(
          ":RequiredDeviceCapabilitiesPlist",
          ":UrlTypesInfoPlist",
      ],
@@ -88,9 +88,9 @@ index 9ad13cf33f..4af26c4e5c 100644
      alternate_icons = [
          ":{}".format(name) for name in alternate_icon_folders
      ],
-@@ -1966,3 +1966,12 @@ ios_application(
-         "//third-party/libvpx:vpx",
+@@ -2047,3 +2047,12 @@ filegroup(
      ],
+     visibility = ["//submodules/ChatListUI:__pkg__"],
  )
 +
 +# Своя иконка TgTeam: у апстрима иконка в новом формате Icon Composer (SVG),
@@ -14069,7 +14069,7 @@ HcmV?d00001
 
 diff --git a/Telegram/Telegram-iOS/TgTeamAppIcon.xcassets/AppIcon.appiconset/Contents.json b/Telegram/Telegram-iOS/TgTeamAppIcon.xcassets/AppIcon.appiconset/Contents.json
 new file mode 100644
-index 0000000000..362ef0de8c
+index 00000000..362ef0de
 --- /dev/null
 +++ b/Telegram/Telegram-iOS/TgTeamAppIcon.xcassets/AppIcon.appiconset/Contents.json
 @@ -0,0 +1,110 @@
@@ -14184,7 +14184,7 @@ index 0000000000..362ef0de8c
 +  }
 +}
 diff --git a/submodules/AccountUtils/Sources/AccountUtils.swift b/submodules/AccountUtils/Sources/AccountUtils.swift
-index 44d09f560f..83112f9f41 100644
+index 44d09f56..83112f9f 100644
 --- a/submodules/AccountUtils/Sources/AccountUtils.swift
 +++ b/submodules/AccountUtils/Sources/AccountUtils.swift
 @@ -4,8 +4,8 @@ import TelegramCore
@@ -14199,7 +14199,7 @@ index 44d09f560f..83112f9f41 100644
  public func activeAccountsAndPeers(context: AccountContext, includePrimary: Bool = false) -> Signal<((AccountContext, EnginePeer)?, [(AccountContext, EnginePeer, Int32)]), NoError> {
      let sharedContext = context.sharedContext
 diff --git a/submodules/SettingsUI/Sources/DeleteAccountOptionsController.swift b/submodules/SettingsUI/Sources/DeleteAccountOptionsController.swift
-index 75adcc0e24..00f340a3e2 100644
+index 588fc00b..ca7dddf7 100644
 --- a/submodules/SettingsUI/Sources/DeleteAccountOptionsController.swift
 +++ b/submodules/SettingsUI/Sources/DeleteAccountOptionsController.swift
 @@ -201,15 +201,15 @@ public func deleteAccountOptionsController(context: AccountContext, navigationCo
@@ -14222,10 +14222,10 @@ index 75adcc0e24..00f340a3e2 100644
                      count += 1
                  }
 diff --git a/submodules/SettingsUI/Sources/LogoutOptionsController.swift b/submodules/SettingsUI/Sources/LogoutOptionsController.swift
-index bc029a99ae..474f0b7101 100644
+index a884524f..e2c97444 100644
 --- a/submodules/SettingsUI/Sources/LogoutOptionsController.swift
 +++ b/submodules/SettingsUI/Sources/LogoutOptionsController.swift
-@@ -139,15 +139,15 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
+@@ -142,15 +142,15 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
          |> take(1)
          |> deliverOnMainQueue
          ).start(next: { accountAndPeer, accountsAndPeers in
@@ -14245,10 +14245,10 @@ index bc029a99ae..474f0b7101 100644
                      count += 1
                  }
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenSettingsActions.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenSettingsActions.swift
-index 806e652ac2..af2c18505c 100644
+index ec998735..934a1887 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenSettingsActions.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenSettingsActions.swift
-@@ -217,15 +217,15 @@ extension PeerInfoScreenNode {
+@@ -224,15 +224,15 @@ extension PeerInfoScreenNode {
                  guard let strongSelf = self else {
                      return
                  }
@@ -14268,10 +14268,10 @@ index 806e652ac2..af2c18505c 100644
                          count += 1
                      }
 diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
-index b1ea96b8da..8abdb27f40 100644
+index 941074ea..91f1901c 100644
 --- a/submodules/TelegramUI/Sources/AppDelegate.swift
 +++ b/submodules/TelegramUI/Sources/AppDelegate.swift
-@@ -949,7 +949,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -991,7 +991,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
          }, getAvailableAlternateIcons: {
              if #available(iOS 10.3, *) {
                  var icons = [
@@ -14280,7 +14280,7 @@ index b1ea96b8da..8abdb27f40 100644
                      PresentationAppIcon(name: "New2", imageName: "New2"),
                      PresentationAppIcon(name: "New1", imageName: "New1"),
                      PresentationAppIcon(name: "BlackIcon", imageName: "BlackIcon"),
-@@ -964,7 +964,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -1006,7 +1006,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                  
                  icons.append(PresentationAppIcon(name: "Premium", imageName: "Premium", isPremium: true))
                  icons.append(PresentationAppIcon(name: "PremiumTurbo", imageName: "PremiumTurbo", isPremium: true))
@@ -14290,17 +14290,17 @@ index b1ea96b8da..8abdb27f40 100644
                  return icons
              } else {
 diff --git a/versions.json b/versions.json
-index 67039e24fa..811349d0ae 100644
+index 0a590e9a..d03a0ae5 100644
 --- a/versions.json
 +++ b/versions.json
 @@ -2,6 +2,6 @@
-     "app": "12.9.2",
-     "xcode": "26.2",
+     "app": "13.0",
+     "xcode": "26.6",
      "deploy_xcode": "26.2",
--    "bazel": "8.4.2:45e9388abf21d1107e146ea366ad080eb93cb6a5f3a4a3b048f78de0bc3faffa",
-+    "bazel": "8.4.2:ce73346274c379f77880db8bd8b9c8569885fe56f19386173760949da9078df0",
+-    "bazel": "9.2.0:dd466352a3e4d3581b8898740ee1ff208866ccbe25f8d367c5dcb950219587e6",
++    "bazel": "9.2.0:14c9bcb01303b38192e0e2895051c1bcf19bf89d7e416f5aeeeb48b6b624cfbf",
      "macos": "26"
  }
 -- 
-2.50.1 (Apple Git-155)
+2.52.0.windows.1
 

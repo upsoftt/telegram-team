@@ -1,7 +1,7 @@
-From 9de2d0b95a24192ce7607e659c294661b605296f Mon Sep 17 00:00:00 2001
+From 62b99369797b23b4b8901824d89735d39d8ddb26 Mon Sep 17 00:00:00 2001
 From: upsoft <13884634+upsoftt@users.noreply.github.com>
 Date: Mon, 24 Aug 2026 03:29:43 +0300
-Subject: [PATCH] LeadSearcher: pinned chats not limited by subscription
+Subject: [PATCH 06/12] LeadSearcher: pinned chats not limited by subscription
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

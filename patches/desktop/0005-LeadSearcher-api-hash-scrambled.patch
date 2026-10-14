@@ -1,7 +1,7 @@
-From 5f210bd43795d3b44a61a1d2fc805823e7992c27 Mon Sep 17 00:00:00 2001
+From 8d708526512dddfe013c82a2acb71ec47edf3d3e Mon Sep 17 00:00:00 2001
 From: upsoft <13884634+upsoftt@users.noreply.github.com>
 Date: Mon, 24 Aug 2026 00:18:25 +0300
-Subject: [PATCH] LeadSearcher: api hash scrambled in binary
+Subject: [PATCH 05/12] LeadSearcher: api hash scrambled in binary
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -19,10 +19,10 @@ Content-Transfer-Encoding: 8bit
  4 files changed, 58 insertions(+), 8 deletions(-)
 
 diff --git a/Telegram/SourceFiles/config.h b/Telegram/SourceFiles/config.h
-index b2da317578..3b1e15698b 100644
+index 744cbc1476..710e5cd13f 100644
 --- a/Telegram/SourceFiles/config.h
 +++ b/Telegram/SourceFiles/config.h
-@@ -61,7 +61,54 @@ w/CVnbwQOw0g5GBwwFV3r0uTTvy44xx8XXxk+Qknu4eBCsmrAFNnAgMBAAE=\n\
+@@ -45,7 +45,54 @@ inline const char *cGUIDStr() {
  #if defined TDESKTOP_API_ID && defined TDESKTOP_API_HASH
  
  constexpr auto ApiId = TDESKTOP_API_ID;
@@ -78,7 +78,7 @@ index b2da317578..3b1e15698b 100644
  
  #else // TDESKTOP_API_ID && TDESKTOP_API_HASH
  
-@@ -83,7 +130,10 @@ constexpr auto ApiHash = QT_STRINGIFY(TDESKTOP_API_HASH);
+@@ -67,7 +114,10 @@ constexpr auto ApiHash = QT_STRINGIFY(TDESKTOP_API_HASH);
  #error You are required to provide API_ID and API_HASH.
  
  constexpr auto ApiId = 17349;

@@ -1,13 +1,13 @@
-From f6222d2f7e0ac104ec3e073136bad695f6091aa1 Mon Sep 17 00:00:00 2001
+From 7effebeb32b248b41c434eeb4ac607e1833190ea Mon Sep 17 00:00:00 2001
 From: upsoft <13884634+upsoftt@users.noreply.github.com>
 Date: Wed, 29 Jul 2026 14:46:16 +0300
-Subject: =?UTF-8?q?LeadSearcher:=20=D1=87=D0=B5=D1=80=D0=BD=D0=BE=D0=B2?=
- =?UTF-8?q?=D0=B8=D0=BA=20=D0=BE=D1=82=D0=B2=D0=B5=D1=82=D0=B0=20=D0=B8?=
- =?UTF-8?q?=D0=B7=20=D1=81=D1=81=D1=8B=D0=BB=D0=BA=D0=B8=20=D0=B2=20=D0=B3?=
- =?UTF-8?q?=D1=80=D1=83=D0=BF=D0=BF=D0=B0=D1=85=20=D0=B8=20=D0=BE=D1=82?=
- =?UTF-8?q?=D0=B2=D0=B5=D1=82=20=D0=BD=D0=B0=20=D0=BD=D1=83=D0=B6=D0=BD?=
- =?UTF-8?q?=D0=BE=D0=B5=20=D1=81=D0=BE=D0=BE=D0=B1=D1=89=D0=B5=D0=BD=D0=B8?=
- =?UTF-8?q?=D0=B5?=
+Subject: [PATCH 02/12] =?UTF-8?q?LeadSearcher:=20=D1=87=D0=B5=D1=80=D0=BD?=
+ =?UTF-8?q?=D0=BE=D0=B2=D0=B8=D0=BA=20=D0=BE=D1=82=D0=B2=D0=B5=D1=82=D0=B0?=
+ =?UTF-8?q?=20=D0=B8=D0=B7=20=D1=81=D1=81=D1=8B=D0=BB=D0=BA=D0=B8=20=D0=B2?=
+ =?UTF-8?q?=20=D0=B3=D1=80=D1=83=D0=BF=D0=BF=D0=B0=D1=85=20=D0=B8=20=D0=BE?=
+ =?UTF-8?q?=D1=82=D0=B2=D0=B5=D1=82=20=D0=BD=D0=B0=20=D0=BD=D1=83=D0=B6?=
+ =?UTF-8?q?=D0=BD=D0=BE=D0=B5=20=D1=81=D0=BE=D0=BE=D0=B1=D1=89=D0=B5=D0=BD?=
+ =?UTF-8?q?=D0=B8=D0=B5?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -31,10 +31,10 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
  5 files changed, 28 insertions(+), 4 deletions(-)
 
 diff --git a/Telegram/SourceFiles/core/local_url_handlers.cpp b/Telegram/SourceFiles/core/local_url_handlers.cpp
-index 2499a18779..e6ddb29686 100644
+index f8ff00a585..315797116e 100644
 --- a/Telegram/SourceFiles/core/local_url_handlers.cpp
 +++ b/Telegram/SourceFiles/core/local_url_handlers.cpp
-@@ -715,6 +715,9 @@ bool ResolveUsernameOrPhone(
+@@ -739,6 +739,9 @@ bool ResolveUsernameOrPhone(
  			? ParseVideoTimestamp(videot)
  			: std::optional<TimeId>()),
  		.text = params.value(u"text"_q),
@@ -91,10 +91,10 @@ index f610d7ab60..f840c93ed9 100644
  
  } // namespace Data
 diff --git a/Telegram/SourceFiles/window/window_session_controller.cpp b/Telegram/SourceFiles/window/window_session_controller.cpp
-index 8119bd7cc6..c3cb5c88ea 100644
+index df2166f1e0..1e01838b92 100644
 --- a/Telegram/SourceFiles/window/window_session_controller.cpp
 +++ b/Telegram/SourceFiles/window/window_session_controller.cpp
-@@ -837,10 +837,15 @@ void SessionNavigation::showPeerByLinkResolved(
+@@ -843,10 +843,15 @@ void SessionNavigation::showPeerByLinkResolved(
  		} else {
  			const auto draft = info.text;
  			const auto historyInNewWindow = info.historyInNewWindow;
@@ -110,8 +110,8 @@ index 8119bd7cc6..c3cb5c88ea 100644
 +				if (!draft.isEmpty()) {
 +					Data::SetChatLinkDraft(peer, { draft }, draftReplyTo);
  				}
- 				if (historyInNewWindow) {
- 					const auto window
+ 				const auto id = SeparateId(peer);
+ 				const auto separate = (historyInNewWindow
 diff --git a/Telegram/SourceFiles/window/window_session_controller_link_info.h b/Telegram/SourceFiles/window/window_session_controller_link_info.h
 index a07a28508f..7311510d0e 100644
 --- a/Telegram/SourceFiles/window/window_session_controller_link_info.h

@@ -1,11 +1,11 @@
-From 85f0768512f3679f6bc55a9134563897fa077427 Mon Sep 17 00:00:00 2001
+From d1535e197925313022fb5aaecc98d6a26044a1be Mon Sep 17 00:00:00 2001
 From: upsoft <13884634+upsoftt@users.noreply.github.com>
 Date: Fri, 31 Jul 2026 21:28:11 +0300
-Subject: =?UTF-8?q?LeadSearcher:=20=D1=87=D0=B5=D1=80=D0=BD=D0=BE=D0=B2?=
- =?UTF-8?q?=D0=B8=D0=BA=20=D0=BE=D1=82=D0=B2=D0=B5=D1=82=D0=B0=20=D0=B8=20?=
- =?UTF-8?q?=D0=B2=20=D1=87=D0=B0=D1=82=D0=B0=D1=85=20=D0=B1=D0=B5=D0=B7=20?=
- =?UTF-8?q?=D0=BF=D1=83=D0=B1=D0=BB=D0=B8=D1=87=D0=BD=D0=BE=D0=B3=D0=BE=20?=
- =?UTF-8?q?=D0=B8=D0=BC=D0=B5=D0=BD=D0=B8?=
+Subject: [PATCH 04/12] =?UTF-8?q?LeadSearcher:=20=D1=87=D0=B5=D1=80=D0=BD?=
+ =?UTF-8?q?=D0=BE=D0=B2=D0=B8=D0=BA=20=D0=BE=D1=82=D0=B2=D0=B5=D1=82=D0=B0?=
+ =?UTF-8?q?=20=D0=B8=20=D0=B2=20=D1=87=D0=B0=D1=82=D0=B0=D1=85=20=D0=B1?=
+ =?UTF-8?q?=D0=B5=D0=B7=20=D0=BF=D1=83=D0=B1=D0=BB=D0=B8=D1=87=D0=BD=D0=BE?=
+ =?UTF-8?q?=D0=B3=D0=BE=20=D0=B8=D0=BC=D0=B5=D0=BD=D0=B8?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -21,10 +21,10 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
  1 file changed, 5 insertions(+)
 
 diff --git a/Telegram/SourceFiles/core/local_url_handlers.cpp b/Telegram/SourceFiles/core/local_url_handlers.cpp
-index e6ddb29686..b852e82dc9 100644
+index 315797116e..1783a8b2da 100644
 --- a/Telegram/SourceFiles/core/local_url_handlers.cpp
 +++ b/Telegram/SourceFiles/core/local_url_handlers.cpp
-@@ -792,6 +792,11 @@ bool ResolvePrivatePost(
+@@ -816,6 +816,11 @@ bool ResolvePrivatePost(
  		.usernameOrId = channelId,
  		.messageId = msgId,
  		.pollOption = pollOption,

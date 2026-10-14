@@ -1,0 +1,30 @@
+From ba9f78c5d19d7935009267039934d474b6864fff Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 13:18:16 +0300
+Subject: [PATCH] TgTeam: wasi-sdk for an Intel build host
+
+Telegram 13.0 compiles the reference call core to WebAssembly with wasi-sdk, and the macOS archive it fetches is arm64-only: on an Intel Mac the genrule fails with "Bad CPU type in executable". The x86_64 archive of the same wasi-sdk 33 release is used instead, checksum from the GitHub release.
+---
+ MODULE.bazel | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/MODULE.bazel b/MODULE.bazel
+index 49ea1049..acd0064c 100644
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -13,9 +13,9 @@ filegroup(
+ 
+ http_archive(
+     name = "wasi_sdk_macos",
+-    urls = ["https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-arm64-macos.tar.gz"],
+-    sha256 = "85c997a2665ead91673b5bb88b7d0df3fc8900df3bfa244f720d478187bbdc78",
+-    strip_prefix = "wasi-sdk-33.0-arm64-macos",
++    urls = ["https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-x86_64-macos.tar.gz"],
++    sha256 = "18f3f201ba9734e6a4455b0b6410690395a55e9ffa9f6f5066f66083a94b93b3",
++    strip_prefix = "wasi-sdk-33.0-x86_64-macos",
+     build_file_content = _WASI_SDK_BUILD,
+ )
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,1242 @@
+From 8f7722bd8955de828a5334ad54becba4522995ee Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 21:33:22 +0300
+Subject: [PATCH 09/12] LeadSearcher: protected content unlocked for the team
+
+The team build (TGTEAM_UNLOCK_PROTECTED, build.ps1 -UnlockProtected) lets
+save, copy and forward posts of any channel or group with content
+protection; the publicly distributed build unlocks it only for admins.
+allowsForwarding() still reports the real setting for the settings box,
+buttons check allowsForwardingForMe().
+
+The server refuses to forward protected messages and to reuse their
+files, so such posts are sent as copies (api/api_protected_copy.cpp):
+media is downloaded to %TEMP%\TelegramTeam\copies and uploaded again,
+albums stay albums, voice stays voice, text keeps its formatting.
+---
+ Telegram/CMakeLists.txt                       |  12 +
+ .../SourceFiles/api/api_protected_copy.cpp    | 717 ++++++++++++++++++
+ Telegram/SourceFiles/api/api_protected_copy.h |  31 +
+ Telegram/SourceFiles/apiwrap.cpp              |   8 +
+ Telegram/SourceFiles/boxes/share_box.cpp      |  15 +-
+ .../SourceFiles/core/click_handler_types.cpp  |   2 +-
+ Telegram/SourceFiles/data/data_peer.cpp       |  23 +-
+ Telegram/SourceFiles/data/data_peer.h         |   7 +
+ .../SourceFiles/data/data_peer_values.cpp     |  24 +-
+ .../history/history_inner_widget.cpp          |   9 +-
+ Telegram/SourceFiles/history/history_item.cpp |  17 +-
+ Telegram/SourceFiles/history/history_item.h   |   6 +
+ .../SourceFiles/history/history_widget.cpp    |   2 +-
+ .../controls/history_view_draft_options.cpp   |   2 +-
+ .../view/history_view_chat_section.cpp        |   6 +-
+ .../view/history_view_context_menu.cpp        |   4 +-
+ .../history/view/history_view_list_widget.cpp |   3 +-
+ .../info/media/info_media_provider.cpp        |   2 +-
+ Telegram/SourceFiles/iv/iv_instance.cpp       |   2 +-
+ .../media/view/media_view_overlay_widget.cpp  |   4 +-
+ 20 files changed, 867 insertions(+), 29 deletions(-)
+ create mode 100644 Telegram/SourceFiles/api/api_protected_copy.cpp
+ create mode 100644 Telegram/SourceFiles/api/api_protected_copy.h
+
+diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
+index ef38afa579..090b5f29d3 100644
+--- a/Telegram/CMakeLists.txt
++++ b/Telegram/CMakeLists.txt
+@@ -183,6 +183,8 @@ PRIVATE
+     api/api_premium.h
+     api/api_premium_option.cpp
+     api/api_premium_option.h
++    api/api_protected_copy.cpp
++    api/api_protected_copy.h
+     api/api_reactions_notify_settings.cpp
+     api/api_reactions_notify_settings.h
+     api/api_read_metrics.cpp
+@@ -2609,6 +2611,16 @@ if (TDESKTOP_API_HASH_SCRAMBLED)
+     )
+ endif()
+ 
++# Сборка для своей команды снимает запрет копирования в любом канале и группе,
++# раздаваемая — только у администраторов. Флаг ставится на один файл, а не на
++# всю цель: иначе переключение между сборками пересобирало бы весь клиент.
++if (TGTEAM_UNLOCK_PROTECTED)
++    set_source_files_properties(${src_loc}/data/data_peer.cpp
++    PROPERTIES
++        COMPILE_DEFINITIONS TGTEAM_UNLOCK_PROTECTED
++    )
++endif()
++
+ get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+ if (APPLE
+     OR is_multi_config
+diff --git a/Telegram/SourceFiles/api/api_protected_copy.cpp b/Telegram/SourceFiles/api/api_protected_copy.cpp
+new file mode 100644
+index 0000000000..d4b62bdb74
+--- /dev/null
++++ b/Telegram/SourceFiles/api/api_protected_copy.cpp
+@@ -0,0 +1,717 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#include "api/api_protected_copy.h"
++
++#include "api/api_sending.h"
++#include "apiwrap.h"
++#include "base/random.h"
++#include "base/timer.h"
++#include "core/application.h"
++#include "data/data_document.h"
++#include "data/data_document_media.h"
++#include "data/data_file_origin.h"
++#include "data/data_media_types.h"
++#include "data/data_peer.h"
++#include "data/data_photo.h"
++#include "data/data_photo_media.h"
++#include "data/data_premium_limits.h"
++#include "data/data_session.h"
++#include "history/history.h"
++#include "history/history_item.h"
++#include "lang/lang_instance.h"
++#include "main/main_session.h"
++#include "storage/localimageloader.h"
++#include "storage/storage_media_prepare.h"
++#include "ui/chat/attach/attach_prepare.h"
++#include "ui/image/image.h"
++#include "ui/text/text_entity.h"
++#include "window/window_controller.h"
++
++#include <QtCore/QDateTime>
++#include <QtCore/QDir>
++#include <QtCore/QFile>
++#include <QtCore/QFileInfo>
++#include <QtCore/QMimeDatabase>
++
++namespace Api {
++namespace {
++
++constexpr auto kCheckInterval = crl::time(300);
++// A prepared file shows up in the chat once it is read and has a thumbnail.
++constexpr auto kAppearTimeout = crl::time(60 * 1000);
++// Uploading a big video can take long, but a stuck send must not hold the
++// rest of the copies forever.
++constexpr auto kSendTimeout = crl::time(30 * 60 * 1000);
++// A download is given up only when it stops moving, not by its length.
++constexpr auto kStallTimeout = crl::time(5 * 60 * 1000);
++// Uploads read the files lazily, so copies are kept for a day and removed
++// on the next copy after that.
++constexpr auto kKeepCopiesSeconds = 24 * 60 * 60;
++constexpr auto kPreviewWidth = 308;
++
++enum class PartKind {
++	Text,
++	Photo,
++	Video,
++	File,
++	Voice,
++	Round,
++	Sticker,
++	Unsupported,
++};
++
++enum class Sent {
++	Nothing,
++	Request, // A plain request, it keeps its place among other requests.
++	Upload, // Goes through the uploader, later requests can overtake it.
++};
++
++struct Part {
++	FullMsgId itemId;
++	PartKind kind = PartKind::Text;
++	TextWithTags text;
++	bool spoiler = false;
++	PhotoData *photo = nullptr;
++	DocumentData *document = nullptr;
++	std::shared_ptr<Data::PhotoMedia> photoMedia;
++	std::shared_ptr<Data::DocumentMedia> documentMedia;
++	QString path;
++	bool ready = false;
++	bool failed = false;
++};
++
++struct Unit {
++	std::vector<Part> parts;
++};
++
++[[nodiscard]] QString Phrase(const QString &ru, const QString &en) {
++	return Lang::GetInstance().id().startsWith(u"ru"_q) ? ru : en;
++}
++
++void ShowToast(const QString &text) {
++	if (const auto window = Core::App().activeWindow()) {
++		window->showToast(text);
++	}
++}
++
++[[nodiscard]] QString CopiesRoot() {
++	return QDir::tempPath() + u"/TelegramTeam/copies"_q;
++}
++
++void RemoveOldCopies() {
++	const auto root = CopiesRoot();
++	const auto border = QDateTime::currentDateTime().addSecs(
++		-kKeepCopiesSeconds);
++	auto dirs = QDir(root).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
++	for (const auto &info : dirs) {
++		if (info.lastModified() < border) {
++			QDir(info.absoluteFilePath()).removeRecursively();
++		}
++	}
++}
++
++[[nodiscard]] QString SafeFileName(QString name) {
++	static const auto bad = QString(u"\\/:*?\"<>|"_q);
++	for (auto &ch : name) {
++		if (bad.contains(ch) || ch.unicode() < 32) {
++			ch = QChar('_');
++		}
++	}
++	return name.trimmed();
++}
++
++// Each file gets its own folder, so the recipient sees the original name
++// and two files with one name never collide.
++[[nodiscard]] QString MakeCopyPath(const QString &name) {
++	const auto folder = CopiesRoot()
++		+ '/'
++		+ QString::number(base::RandomValue<uint64>(), 16);
++	QDir().mkpath(folder);
++	return folder + '/' + name;
++}
++
++[[nodiscard]] QString DocumentCopyName(
++		not_null<DocumentData*> document,
++		PartKind kind) {
++	const auto name = SafeFileName(document->filename());
++	if (!name.isEmpty()) {
++		return name;
++	}
++	auto suffix = QMimeDatabase().mimeTypeForName(
++		document->mimeString()).preferredSuffix();
++	if (suffix.isEmpty()) {
++		suffix = (kind == PartKind::Voice)
++			? u"ogg"_q
++			: (kind == PartKind::Video || kind == PartKind::Round)
++			? u"mp4"_q
++			: u"bin"_q;
++	}
++	const auto base = (kind == PartKind::Voice)
++		? u"voice"_q
++		: (kind == PartKind::Round)
++		? u"round"_q
++		: (kind == PartKind::Video)
++		? u"video"_q
++		: u"file"_q;
++	return base + '.' + suffix;
++}
++
++[[nodiscard]] Part MakePart(not_null<HistoryItem*> item, bool dropCaptions) {
++	auto result = Part{ .itemId = item->fullId() };
++	const auto media = item->media();
++	const auto &original = item->originalText();
++	if (!(dropCaptions && media && !media->webpage())) {
++		result.text = TextWithTags{
++			original.text,
++			TextUtilities::ConvertEntitiesToTextTags(original.entities),
++		};
++	}
++	if (!media || media->webpage()) {
++		result.kind = PartKind::Text;
++	} else if (const auto photo = media->photo()) {
++		result.kind = PartKind::Photo;
++		result.photo = photo;
++		result.spoiler = media->hasSpoiler();
++	} else if (const auto document = media->document()) {
++		result.document = document;
++		result.spoiler = media->hasSpoiler();
++		result.kind = document->sticker()
++			? PartKind::Sticker
++			: document->isVoiceMessage()
++			? PartKind::Voice
++			: document->isVideoMessage()
++			? PartKind::Round
++			: (document->isVideoFile() || document->isAnimation())
++			? PartKind::Video
++			: PartKind::File;
++	} else {
++		result.kind = PartKind::Unsupported;
++	}
++	return result;
++}
++
++[[nodiscard]] bool IsUploadKind(PartKind kind) {
++	return (kind == PartKind::Photo)
++		|| (kind == PartKind::Video)
++		|| (kind == PartKind::File);
++}
++
++[[nodiscard]] std::vector<Unit> CollectUnits(
++		std::vector<not_null<HistoryItem*>> items,
++		bool dropCaptions,
++		int captionLimit) {
++	const auto sameHistory = ranges::all_of(items, [&](auto item) {
++		return item->history() == items.front()->history();
++	});
++	if (sameHistory) {
++		ranges::stable_sort(items, ranges::less(), &HistoryItem::id);
++	}
++	auto result = std::vector<Unit>();
++	// Texts that can't stay a caption go right after their album.
++	auto pendingTexts = std::vector<Part>();
++	const auto flushTexts = [&] {
++		for (auto &text : pendingTexts) {
++			result.push_back({ .parts = { std::move(text) } });
++		}
++		pendingTexts.clear();
++	};
++	auto groupId = MessageGroupId();
++	for (const auto &item : items) {
++		auto part = MakePart(item, dropCaptions);
++		const auto group = item->groupId();
++		const auto joinsAlbum = group
++			&& (group == groupId)
++			&& IsUploadKind(part.kind)
++			&& !result.empty()
++			&& IsUploadKind(result.back().parts.back().kind);
++		if (!joinsAlbum) {
++			flushTexts();
++		}
++		groupId = group;
++		// Voice and round messages and stickers have no caption when they
++		// are sent again, and a caption over the limit would be refused.
++		const auto separateText = !part.text.text.isEmpty()
++			&& ((part.kind == PartKind::Voice
++				|| part.kind == PartKind::Round
++				|| part.kind == PartKind::Sticker)
++				|| (IsUploadKind(part.kind)
++					&& part.text.text.size() > captionLimit));
++		if (separateText) {
++			pendingTexts.push_back(Part{
++				.itemId = item->fullId(),
++				.kind = PartKind::Text,
++				.text = base::take(part.text),
++			});
++		}
++		if (joinsAlbum) {
++			result.back().parts.push_back(std::move(part));
++		} else {
++			result.push_back({ .parts = { std::move(part) } });
++		}
++	}
++	flushTexts();
++	return result;
++}
++
++// Starts saving a document to 'path', or joins a save already running:
++// a second save of the same document cancels the first one, and copies
++// into several chats at once download every document exactly once.
++[[nodiscard]] QString StartDocumentSave(
++		not_null<DocumentData*> document,
++		Data::FileOrigin origin,
++		PartKind kind) {
++	if (document->loading()) {
++		const auto already = document->loadingFilePath();
++		if (!already.isEmpty()) {
++			return already;
++		}
++	} else {
++		const auto existing = document->filepath(true);
++		if (!existing.isEmpty()) {
++			return existing;
++		}
++	}
++	const auto path = MakeCopyPath(DocumentCopyName(document, kind));
++	document->save(origin, path);
++	return path;
++}
++
++class CopyJob final {
++public:
++	CopyJob(
++		uint64 id,
++		std::vector<not_null<HistoryItem*>> items,
++		SendAction action,
++		bool dropCaptions);
++
++	void start();
++
++private:
++	enum class State {
++		WaitReady,
++		WaitAppear,
++		WaitSent,
++		WaitUploadStart,
++		WaitUploadEnd,
++		Finished,
++	};
++
++	void tick();
++	void startLoading(Part &part);
++	void checkLoaded(Part &part);
++	[[nodiscard]] float64 currentProgress() const;
++	void sendNext();
++	[[nodiscard]] Sent sendUnit(Unit &unit);
++	[[nodiscard]] bool sendFiles(std::vector<Part*> parts);
++	void setState(State state);
++	void finish();
++
++	const uint64 _id = 0;
++	const not_null<Main::Session*> _session;
++	const not_null<History*> _history;
++	const bool _scheduled = false;
++	SendAction _action;
++	std::vector<Unit> _units;
++	base::Timer _timer;
++	State _state = State::WaitReady;
++	int _next = 0;
++	int _failed = 0;
++	crl::time _stateStarted = 0;
++	float64 _lastProgress = -1.;
++	crl::time _lastProgressAt = 0;
++	bool _addedSinceSend = false;
++	rpl::lifetime _lifetime;
++
++};
++
++std::vector<std::unique_ptr<CopyJob>> &Jobs() {
++	static auto result = std::vector<std::unique_ptr<CopyJob>>();
++	return result;
++}
++
++std::vector<uint64> &JobIds() {
++	static auto result = std::vector<uint64>();
++	return result;
++}
++
++void RemoveJob(uint64 id) {
++	auto &ids = JobIds();
++	const auto i = ranges::find(ids, id);
++	if (i != end(ids)) {
++		const auto index = int(i - begin(ids));
++		ids.erase(i);
++		Jobs().erase(begin(Jobs()) + index);
++	}
++}
++
++CopyJob::CopyJob(
++	uint64 id,
++	std::vector<not_null<HistoryItem*>> items,
++	SendAction action,
++	bool dropCaptions)
++: _id(id)
++, _session(&action.history->session())
++, _history(action.history)
++, _scheduled(action.options.scheduled || action.options.shortcutId)
++, _action(action)
++, _units(CollectUnits(
++	std::move(items),
++	dropCaptions,
++	Data::PremiumLimits(_session).captionLengthCurrent()))
++, _timer([=] { tick(); }) {
++	// A real forward ignores the replied message, and so do the copies:
++	// they stay in the right topic, but don't become replies.
++	_action.replyTo = FullReplyTo{
++		.topicRootId = action.replyTo.topicRootId,
++		.monoforumPeerId = action.replyTo.monoforumPeerId,
++	};
++	_action.clearDraft = false;
++	_session->data().newItemAdded(
++	) | rpl::filter([=](not_null<HistoryItem*> item) {
++		return (item->history() == _history)
++			&& item->out()
++			&& item->isSending();
++	}) | rpl::on_next([=] {
++		_addedSinceSend = true;
++	}, _lifetime);
++}
++
++void CopyJob::start() {
++	RemoveOldCopies();
++	auto withMedia = false;
++	for (auto &unit : _units) {
++		for (auto &part : unit.parts) {
++			startLoading(part);
++			withMedia = withMedia || IsUploadKind(part.kind)
++				|| part.kind == PartKind::Voice
++				|| part.kind == PartKind::Round;
++		}
++	}
++	if (withMedia) {
++		ShowToast(Phrase(
++			u"Канал защищён от копирования: отправляю копию. "
++			"Большие файлы сначала скачаются."_q,
++			u"The channel is protected: sending a copy. "
++			"Big files are downloaded first."_q));
++	}
++	_timer.callEach(kCheckInterval);
++	sendNext();
++}
++
++void CopyJob::startLoading(Part &part) {
++	const auto origin = Data::FileOrigin(part.itemId);
++	if (part.photo) {
++		part.photoMedia = part.photo->createMediaView();
++		part.photoMedia->wanted(Data::PhotoSize::Large, origin);
++	} else if (part.document
++		&& part.kind != PartKind::Sticker
++		&& part.kind != PartKind::Unsupported) {
++		// Keeps the bytes in memory while the copy is being made.
++		part.documentMedia = part.document->createMediaView();
++		part.path = StartDocumentSave(part.document, origin, part.kind);
++	} else {
++		part.ready = true;
++	}
++}
++
++void CopyJob::checkLoaded(Part &part) {
++	if (part.ready || part.failed) {
++		return;
++	} else if (part.photoMedia) {
++		// image() also finds a photo without the largest size, while
++		// loaded() waits for exactly that size and would wait forever.
++		const auto large = Data::PhotoSize::Large;
++		if (const auto image = part.photoMedia->image(large)) {
++			part.path = MakeCopyPath(u"photo.jpg"_q);
++			const auto bytes = part.photoMedia->imageBytes(large);
++			if (!bytes.isEmpty()) {
++				auto f = QFile(part.path);
++				if (f.open(QIODevice::WriteOnly)) {
++					f.write(bytes);
++					f.close();
++				}
++			} else {
++				image->original().save(part.path, "JPG", 95);
++			}
++			part.ready = (QFileInfo(part.path).size() > 0);
++			part.failed = !part.ready;
++		} else if (part.photo->failed(large)) {
++			part.failed = true;
++		}
++	} else if (part.document) {
++		if (part.document->loading()) {
++			return;
++		}
++		const auto info = QFileInfo(part.path);
++		const auto expected = part.document->size;
++		part.ready = info.exists()
++			&& (info.size() > 0)
++			&& (expected <= 0 || info.size() >= expected);
++		part.failed = !part.ready;
++	}
++}
++
++float64 CopyJob::currentProgress() const {
++	auto result = 0.;
++	if (_next < int(_units.size())) {
++		for (const auto &part : _units[_next].parts) {
++			if (part.document) {
++				result += part.document->progress();
++			} else if (part.photo) {
++				result += part.photo->progress();
++			}
++		}
++	}
++	return result;
++}
++
++void CopyJob::setState(State state) {
++	_state = state;
++	_stateStarted = crl::now();
++}
++
++void CopyJob::tick() {
++	const auto now = crl::now();
++	switch (_state) {
++	case State::WaitReady: {
++		const auto progress = currentProgress();
++		if (progress != _lastProgress) {
++			_lastProgress = progress;
++			_lastProgressAt = now;
++		} else if (now - _lastProgressAt >= kStallTimeout) {
++			for (auto &part : _units[_next].parts) {
++				if (!part.ready) {
++					part.failed = true;
++				}
++			}
++		}
++		sendNext();
++	} break;
++	case State::WaitAppear:
++		if (_addedSinceSend || (now - _stateStarted >= kAppearTimeout)) {
++			setState(State::WaitSent);
++		}
++		break;
++	case State::WaitSent:
++		if (!_history->latestSendingMessage()
++			|| (now - _stateStarted >= kSendTimeout)) {
++			sendNext();
++		}
++		break;
++	case State::WaitUploadStart:
++		// Scheduled messages don't appear in the chat, so the uploader
++		// itself tells when the file got its turn and when it is done.
++		if (_session->uploadsInProgress()) {
++			setState(State::WaitUploadEnd);
++		} else if (now - _stateStarted >= kAppearTimeout) {
++			sendNext();
++		}
++		break;
++	case State::WaitUploadEnd:
++		if (!_session->uploadsInProgress()
++			|| (now - _stateStarted >= kSendTimeout)) {
++			sendNext();
++		}
++		break;
++	case State::Finished:
++		break;
++	}
++}
++
++void CopyJob::sendNext() {
++	while (_next < int(_units.size())) {
++		auto &unit = _units[_next];
++		auto waiting = false;
++		for (auto &part : unit.parts) {
++			checkLoaded(part);
++			waiting = waiting || !(part.ready || part.failed);
++		}
++		if (waiting) {
++			if (_state != State::WaitReady) {
++				setState(State::WaitReady);
++				_lastProgress = currentProgress();
++				_lastProgressAt = crl::now();
++			}
++			return;
++		}
++		++_next;
++		_addedSinceSend = false;
++		const auto sent = sendUnit(unit);
++		if (sent == Sent::Nothing) {
++			continue;
++		} else if (!_scheduled) {
++			setState(State::WaitAppear);
++			return;
++		} else if (sent == Sent::Upload) {
++			setState(State::WaitUploadStart);
++			return;
++		}
++	}
++	finish();
++}
++
++Sent CopyJob::sendUnit(Unit &unit) {
++	auto &api = _session->api();
++	const auto &first = unit.parts.front();
++	switch (first.kind) {
++	case PartKind::Text:
++	case PartKind::Unsupported: {
++		if (first.kind == PartKind::Unsupported) {
++			++_failed;
++		}
++		if (first.text.text.isEmpty()) {
++			if (first.kind == PartKind::Text) {
++				++_failed;
++			}
++			return Sent::Nothing;
++		}
++		auto message = MessageToSend(_action);
++		message.textWithTags = first.text;
++		api.sendMessage(std::move(message));
++		return Sent::Request;
++	}
++	case PartKind::Sticker:
++		SendExistingDocument(MessageToSend(_action), first.document);
++		return Sent::Request;
++	case PartKind::Voice:
++	case PartKind::Round: {
++		if (first.failed) {
++			++_failed;
++			return Sent::Nothing;
++		}
++		auto f = QFile(first.path);
++		if (!f.open(QIODevice::ReadOnly)) {
++			++_failed;
++			return Sent::Nothing;
++		}
++		const auto bytes = f.readAll();
++		f.close();
++		const auto voice = (first.kind == PartKind::Voice)
++			? first.document->voice()
++			: first.document->round();
++		api.sendVoiceMessage(
++			bytes,
++			voice ? voice->waveform : VoiceWaveform(),
++			first.document->duration(),
++			(first.kind == PartKind::Round),
++			_action);
++		return Sent::Upload;
++	}
++	case PartKind::Photo:
++	case PartKind::Video:
++	case PartKind::File: {
++		auto parts = std::vector<Part*>();
++		for (auto &part : unit.parts) {
++			if (part.failed) {
++				++_failed;
++			} else {
++				parts.push_back(&part);
++			}
++		}
++		return (!parts.empty() && sendFiles(std::move(parts)))
++			? Sent::Upload
++			: Sent::Nothing;
++	}
++	}
++	return Sent::Nothing;
++}
++
++bool CopyJob::sendFiles(std::vector<Part*> parts) {
++	auto paths = QStringList();
++	for (const auto part : parts) {
++		paths.push_back(part->path);
++	}
++	auto list = Storage::PrepareMediaList(
++		paths,
++		kPreviewWidth,
++		_session->premium());
++	if (list.error != Ui::PreparedList::Error::None
++		|| list.files.size() != parts.size()) {
++		_failed += int(parts.size());
++		return false;
++	}
++	auto documents = false;
++	for (auto i = 0; i != int(parts.size()); ++i) {
++		auto &file = list.files[i];
++		file.caption = parts[i]->text;
++		file.spoiler = parts[i]->spoiler;
++		if (parts[i]->kind == PartKind::Photo) {
++			file.sendLargePhotos = true;
++		} else if (parts[i]->kind == PartKind::File) {
++			documents = true;
++		}
++	}
++	const auto album = (list.files.size() > 1)
++		? std::make_shared<SendingAlbum>()
++		: nullptr;
++	_session->api().sendFiles(
++		std::move(list),
++		documents ? SendMediaType::File : SendMediaType::Photo,
++		album,
++		_action);
++	return true;
++}
++
++void CopyJob::finish() {
++	if (_state == State::Finished) {
++		return;
++	}
++	setState(State::Finished);
++	_timer.cancel();
++	_lifetime.destroy();
++	if (_failed > 0) {
++		ShowToast(Phrase(
++			u"Не удалось скопировать сообщений: %1."_q,
++			u"Could not copy %1 message(s)."_q).arg(_failed));
++	}
++	const auto id = _id;
++	crl::on_main([=] {
++		RemoveJob(id);
++	});
++}
++
++} // namespace
++
++std::vector<not_null<HistoryItem*>> ExtractProtectedCopies(
++		std::vector<not_null<HistoryItem*>> &items) {
++	auto result = std::vector<not_null<HistoryItem*>>();
++	for (auto i = begin(items); i != end(items);) {
++		if ((*i)->needsProtectedCopy()) {
++			result.push_back(*i);
++			i = items.erase(i);
++		} else {
++			++i;
++		}
++	}
++	return result;
++}
++
++void SendProtectedCopies(
++		std::vector<not_null<HistoryItem*>> items,
++		SendAction action,
++		bool dropCaptions) {
++	if (items.empty()) {
++		return;
++	}
++	static auto NextId = uint64(0);
++	const auto id = ++NextId;
++	const auto session = &action.history->session();
++	Jobs().push_back(std::make_unique<CopyJob>(
++		id,
++		std::move(items),
++		action,
++		dropCaptions));
++	JobIds().push_back(id);
++	// A job must not outlive the account it sends from.
++	session->lifetime().add([=] {
++		RemoveJob(id);
++	});
++	Jobs().back()->start();
++}
++
++} // namespace Api
+diff --git a/Telegram/SourceFiles/api/api_protected_copy.h b/Telegram/SourceFiles/api/api_protected_copy.h
+new file mode 100644
+index 0000000000..24dade115e
+--- /dev/null
++++ b/Telegram/SourceFiles/api/api_protected_copy.h
+@@ -0,0 +1,31 @@
++/*
++This file is part of Telegram Desktop,
++the official desktop application for the Telegram messaging service.
++
++For license and copyright information please follow this link:
++https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
++*/
++#pragma once
++
++#include "api/api_common.h"
++
++class HistoryItem;
++
++namespace Api {
++
++// Telegram Team: posts of a protected channel or group, where we are an
++// admin, can't be forwarded - the server refuses messages.forwardMessages
++// for them and refuses reusing their media as well. So they are sent as
++// copies: media is downloaded and uploaded again, text keeps formatting,
++// albums stay albums, voice messages stay voice messages.
++
++// Moves the items that need a copy out of 'items' and returns them.
++[[nodiscard]] std::vector<not_null<HistoryItem*>> ExtractProtectedCopies(
++	std::vector<not_null<HistoryItem*>> &items);
++
++void SendProtectedCopies(
++	std::vector<not_null<HistoryItem*>> items,
++	SendAction action,
++	bool dropCaptions);
++
++} // namespace Api
+diff --git a/Telegram/SourceFiles/apiwrap.cpp b/Telegram/SourceFiles/apiwrap.cpp
+index 23afed56f5..adefc45f2b 100644
+--- a/Telegram/SourceFiles/apiwrap.cpp
++++ b/Telegram/SourceFiles/apiwrap.cpp
+@@ -21,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "api/api_peer_colors.h"
+ #include "api/api_peer_photo.h"
+ #include "api/api_polls.h"
++#include "api/api_protected_copy.h"
+ #include "api/api_sending.h"
+ #include "api/api_text_entities.h"
+ #include "api/api_rich_tasks.h"
+@@ -3908,6 +3909,13 @@ void ApiWrap::forwardMessages(
+ 			++i;
+ 		}
+ 	}
++	auto copies = Api::ExtractProtectedCopies(draft.items);
++	if (!copies.empty()) {
++		Api::SendProtectedCopies(
++			std::move(copies),
++			action,
++			(draft.options == Data::ForwardOptions::NoNamesAndCaptions));
++	}
+ 	if (draft.items.empty()) {
+ 		if (successCallback) {
+ 			successCallback();
+diff --git a/Telegram/SourceFiles/boxes/share_box.cpp b/Telegram/SourceFiles/boxes/share_box.cpp
+index b7bf9f0d1f..6fc5ee7bc1 100644
+--- a/Telegram/SourceFiles/boxes/share_box.cpp
++++ b/Telegram/SourceFiles/boxes/share_box.cpp
+@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "boxes/share_box.h"
+ 
+ #include "api/api_premium.h"
++#include "api/api_protected_copy.h"
+ #include "base/call_delayed.h"
+ #include "base/random.h"
+ #include "lang/lang_keys.h"
+@@ -1875,8 +1876,12 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
+ 			| (videoTimestamp.has_value()
+ 				? Flag::f_video_timestamp
+ 				: Flag(0));
+-		const auto ranges = CollectForwardRanges(items);
+-		if (ranges.empty()) {
++		auto forwardItems = items;
++		const auto copies = Api::ExtractProtectedCopies(forwardItems);
++		const auto dropCaptions = (forwardOptions
++			== Data::ForwardOptions::NoNamesAndCaptions);
++		const auto ranges = CollectForwardRanges(forwardItems);
++		if (ranges.empty() && copies.empty()) {
+ 			return;
+ 		}
+ 		auto &api = history->session().api();
+@@ -1911,6 +1916,12 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
+ 				message.action.clearDraft = false;
+ 				api.sendMessage(std::move(message));
+ 			}
++			if (!copies.empty()) {
++				Api::SendProtectedCopies(
++					copies,
++					Api::SendAction(effectiveThread, options),
++					dropCaptions);
++			}
+ 
+ 			const auto topicRootId = effectiveThread->topicRootId();
+ 			const auto sublistPeer = needNewTopic
+diff --git a/Telegram/SourceFiles/core/click_handler_types.cpp b/Telegram/SourceFiles/core/click_handler_types.cpp
+index ec7481a922..6b7f3b0fff 100644
+--- a/Telegram/SourceFiles/core/click_handler_types.cpp
++++ b/Telegram/SourceFiles/core/click_handler_types.cpp
+@@ -826,7 +826,7 @@ void FormattedDateClickHandler::onClick(ClickContext context) const {
+ 
+ 	const auto canForward = item
+ 		&& !item->forbidsForward()
+-		&& item->history()->peer->allowsForwarding();
++		&& item->history()->peer->allowsForwardingForMe();
+ 	if (canForward) {
+ 		menu->addAction(
+ 			tr::lng_context_set_reminder(tr::now),
+diff --git a/Telegram/SourceFiles/data/data_peer.cpp b/Telegram/SourceFiles/data/data_peer.cpp
+index ba7924611f..4a41be826a 100644
+--- a/Telegram/SourceFiles/data/data_peer.cpp
++++ b/Telegram/SourceFiles/data/data_peer.cpp
+@@ -787,7 +787,7 @@ bool PeerData::canEditMessagesIndefinitely() const {
+ }
+ 
+ bool PeerData::canExportChatHistory() const {
+-	if (isRepliesChat() || isVerifyCodes() || !allowsForwarding()) {
++	if (isRepliesChat() || isVerifyCodes() || !allowsForwardingForMe()) {
+ 		return false;
+ 	} else if (const auto channel = asChannel()) {
+ 		if (!channel->amIn() && channel->invitePeekExpires()) {
+@@ -1747,6 +1747,27 @@ bool PeerData::allowsForwarding() const {
+ 	return false;
+ }
+ 
++bool PeerData::protectedContentUnlocked() const {
++#ifdef TGTEAM_UNLOCK_PROTECTED
++	// The team build: our own team saves and forwards posts of any
++	// protected channel or group, admins or not. The publicly distributed
++	// build is configured without this and unlocks only for admins.
++	if (isChannel() || isChat()) {
++		return true;
++	}
++#endif // TGTEAM_UNLOCK_PROTECTED
++	if (const auto channel = asChannel()) {
++		return channel->amCreator() || channel->hasAdminRights();
++	} else if (const auto chat = asChat()) {
++		return chat->amCreator() || chat->hasAdminRights();
++	}
++	return false;
++}
++
++bool PeerData::allowsForwardingForMe() const {
++	return allowsForwarding() || protectedContentUnlocked();
++}
++
+ Data::RestrictionCheckResult PeerData::amRestricted(
+ 		ChatRestriction right) const {
+ 	using Result = Data::RestrictionCheckResult;
+diff --git a/Telegram/SourceFiles/data/data_peer.h b/Telegram/SourceFiles/data/data_peer.h
+index f3aeb58bb8..31fb3502d0 100644
+--- a/Telegram/SourceFiles/data/data_peer.h
++++ b/Telegram/SourceFiles/data/data_peer.h
+@@ -322,7 +322,14 @@ public:
+ 		return _notify;
+ 	}
+ 
++	// The channel's own setting, as the server reports it. Settings boxes
++	// read and write exactly this value, so it must stay untouched.
+ 	[[nodiscard]] bool allowsForwarding() const;
++	// Telegram Team: protected content of a channel or group is unlocked -
++	// it can be saved and forwarded as a copy. The team build unlocks it
++	// everywhere (TGTEAM_UNLOCK_PROTECTED), the public one only for admins.
++	[[nodiscard]] bool protectedContentUnlocked() const;
++	[[nodiscard]] bool allowsForwardingForMe() const;
+ 	[[nodiscard]] Data::RestrictionCheckResult amRestricted(
+ 		ChatRestriction right) const;
+ 	[[nodiscard]] bool amAnonymous() const;
+diff --git a/Telegram/SourceFiles/data/data_peer_values.cpp b/Telegram/SourceFiles/data/data_peer_values.cpp
+index edd65ef986..7cb104f1fe 100644
+--- a/Telegram/SourceFiles/data/data_peer_values.cpp
++++ b/Telegram/SourceFiles/data/data_peer_values.cpp
+@@ -387,15 +387,23 @@ rpl::producer<bool> AllowsForwardingValue(not_null<PeerData*> peer) {
+ 			return !my && !peer;
+ 		});
+ 	} else if (const auto chat = peer->asChat()) {
+-		return PeerFlagValue(
+-			chat,
+-			ChatDataFlag::NoForwards
+-		) | rpl::map(!rpl::mappers::_1);
++		return rpl::combine(
++			PeerFlagsValue(
++				chat,
++				ChatDataFlag::NoForwards | ChatDataFlag::Creator),
++			chat->adminRightsValue()
++		) | rpl::map([=] {
++			return peer->allowsForwardingForMe();
++		}) | rpl::distinct_until_changed();
+ 	} else if (const auto channel = peer->asChannel()) {
+-		return PeerFlagValue(
+-			channel,
+-			ChannelDataFlag::NoForwards
+-		) | rpl::map(!rpl::mappers::_1);
++		return rpl::combine(
++			PeerFlagsValue(
++				channel,
++				ChannelDataFlag::NoForwards | ChannelDataFlag::Creator),
++			channel->adminRightsValue()
++		) | rpl::map([=] {
++			return peer->allowsForwardingForMe();
++		}) | rpl::distinct_until_changed();
+ 	}
+ 	return rpl::single(true);
+ }
+diff --git a/Telegram/SourceFiles/history/history_inner_widget.cpp b/Telegram/SourceFiles/history/history_inner_widget.cpp
+index 391e1d3a01..ded676b37e 100644
+--- a/Telegram/SourceFiles/history/history_inner_widget.cpp
++++ b/Telegram/SourceFiles/history/history_inner_widget.cpp
+@@ -755,7 +755,8 @@ void HistoryInner::setupSwipeReplyAndBack() {
+ 				data.cursorPosition,
+ 				view);
+ 			const auto canSendReply = CanSendReply(item);
+-			const auto canReply = (canSendReply || item->allowsForward());
++			const auto canReply = (canSendReply
++				|| item->allowsReplyInAnotherChat());
+ 			if (!canReply) {
+ 				return true;
+ 			}
+@@ -3295,7 +3296,8 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
+ 			return;
+ 		}
+ 		const auto canSendReply = CanSendReply(item);
+-		const auto canReply = canSendReply || item->allowsForward();
++		const auto canReply = canSendReply
++			|| item->allowsReplyInAnotherChat();
+ 		if (canReply) {
+ 			const auto selected = selectedQuote(item);
+ 			auto text = (selected
+@@ -3911,7 +3913,8 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
+ }
+ 
+ bool HistoryInner::hasCopyRestriction(HistoryItem *item) const {
+-	return !_peer->allowsForwarding() || (item && item->forbidsForward());
++	return !_peer->allowsForwardingForMe()
++		|| (item && item->forbidsForward());
+ }
+ 
+ bool HistoryInner::hasCopyMediaRestriction(
+diff --git a/Telegram/SourceFiles/history/history_item.cpp b/Telegram/SourceFiles/history/history_item.cpp
+index ae73cb5318..93878c7e1d 100644
+--- a/Telegram/SourceFiles/history/history_item.cpp
++++ b/Telegram/SourceFiles/history/history_item.cpp
+@@ -3373,10 +3373,14 @@ bool HistoryItem::allowsForward() const {
+ 	return !isService()
+ 		&& (isRegular() || isEphemeral())
+ 		&& !forbidsForward()
+-		&& history()->peer->allowsForwarding()
++		&& history()->peer->allowsForwardingForMe()
+ 		&& (!_media || _media->allowsForward());
+ }
+ 
++bool HistoryItem::allowsReplyInAnotherChat() const {
++	return allowsForward() && !needsProtectedCopy();
++}
++
+ bool HistoryItem::isTooOldForEdit(TimeId now) const {
+ 	return !_history->peer->canEditMessagesIndefinitely()
+ 		&& !isScheduled()
+@@ -3443,7 +3447,14 @@ bool HistoryItem::canStopPoll() const {
+ }
+ 
+ bool HistoryItem::forbidsForward() const {
+-	return (_flags & MessageFlag::NoForwards);
++	return (_flags & MessageFlag::NoForwards)
++		&& !_history->peer->protectedContentUnlocked();
++}
++
++bool HistoryItem::needsProtectedCopy() const {
++	const auto peer = _history->peer;
++	return peer->protectedContentUnlocked()
++		&& ((_flags & MessageFlag::NoForwards) || !peer->allowsForwarding());
+ }
+ 
+ bool HistoryItem::forbidsSaving() const {
+@@ -3459,7 +3470,7 @@ bool HistoryItem::forbidsSaving() const {
+ 
+ bool HistoryItem::allowsMediaDownloadControls() const {
+ 	return !forbidsSaving()
+-		&& _history->peer->allowsForwarding()
++		&& _history->peer->allowsForwardingForMe()
+ 		&& (!_media || _media->allowsForward());
+ }
+ 
+diff --git a/Telegram/SourceFiles/history/history_item.h b/Telegram/SourceFiles/history/history_item.h
+index 0abe876517..73a8a3cf24 100644
+--- a/Telegram/SourceFiles/history/history_item.h
++++ b/Telegram/SourceFiles/history/history_item.h
+@@ -491,10 +491,16 @@ public:
+ 	[[nodiscard]] bool canBeEdited() const;
+ 	[[nodiscard]] bool canStopPoll() const;
+ 	[[nodiscard]] bool forbidsForward() const;
++	// Telegram Team: protected, but unlocked for us as admins. The server
++	// still refuses to forward it, so it is sent as a copy instead.
++	[[nodiscard]] bool needsProtectedCopy() const;
+ 	[[nodiscard]] bool forbidsSaving() const;
+ 	[[nodiscard]] bool allowsSendNow() const;
+ 	[[nodiscard]] bool allowsReschedule() const;
+ 	[[nodiscard]] bool allowsForward() const;
++	// A reply from another chat links to the original message, and the
++	// server refuses that for protected content even to admins.
++	[[nodiscard]] bool allowsReplyInAnotherChat() const;
+ 	[[nodiscard]] bool allowsMediaDownloadControls() const;
+ 	[[nodiscard]] bool allowsEdit(TimeId now) const;
+ 	[[nodiscard]] bool allowsEditMedia() const;
+diff --git a/Telegram/SourceFiles/history/history_widget.cpp b/Telegram/SourceFiles/history/history_widget.cpp
+index 43b200334a..6fbeed4369 100644
+--- a/Telegram/SourceFiles/history/history_widget.cpp
++++ b/Telegram/SourceFiles/history/history_widget.cpp
+@@ -10386,7 +10386,7 @@ void HistoryWidget::replyToMessage(FullReplyTo id) {
+ 	if (const auto item = session().data().message(id.messageId)) {
+ 		if (CanSendReply(item) && !base::IsCtrlPressed()) {
+ 			replyToMessage(item, id);
+-		} else if (item->allowsForward()) {
++		} else if (item->allowsReplyInAnotherChat()) {
+ 			const auto show = controller()->uiShow();
+ 			HistoryView::Controls::ShowReplyToChatBox(show, id);
+ 		} else {
+diff --git a/Telegram/SourceFiles/history/view/controls/history_view_draft_options.cpp b/Telegram/SourceFiles/history/view/controls/history_view_draft_options.cpp
+index 9dabfb1091..bc1f395caa 100644
+--- a/Telegram/SourceFiles/history/view/controls/history_view_draft_options.cpp
++++ b/Telegram/SourceFiles/history/view/controls/history_view_draft_options.cpp
+@@ -858,7 +858,7 @@ void DraftOptionsBox(
+ 		AddFilledSkip(bottom);
+ 
+ 		const auto item = state->quote.current().item;
+-		if (item->allowsForward()) {
++		if (item->allowsReplyInAnotherChat()) {
+ 			Settings::AddButtonWithIcon(
+ 				bottom,
+ 				tr::lng_reply_in_another_chat(),
+diff --git a/Telegram/SourceFiles/history/view/history_view_chat_section.cpp b/Telegram/SourceFiles/history/view/history_view_chat_section.cpp
+index 28e423bcc6..d604fe37b3 100644
+--- a/Telegram/SourceFiles/history/view/history_view_chat_section.cpp
++++ b/Telegram/SourceFiles/history/view/history_view_chat_section.cpp
+@@ -674,7 +674,8 @@ ChatWidget::ChatWidget(
+ 			SendPermission::Anything);
+ 		const auto &to = request.to;
+ 		const auto still = _history->owner().message(to.messageId);
+-		const auto allowInAnotherChat = still && still->allowsForward();
++		const auto allowInAnotherChat = still
++			&& still->allowsReplyInAnotherChat();
+ 		const auto bottomBarActive = _bottom->isButtonActive();
+ 		if (allowInAnotherChat
+ 			&& (bottomBarActive
+@@ -1822,7 +1823,8 @@ void ChatWidget::setupSwipeReplyAndBack() {
+ 			_peer,
+ 			resolvedTopic(),
+ 			SendPermission::Anything);
+-		const auto allowInAnotherChat = still && still->allowsForward();
++		const auto allowInAnotherChat = still
++			&& still->allowsReplyInAnotherChat();
+ 		const auto bottomBarActive = _bottom->isButtonActive();
+ 		if (allowInAnotherChat && (bottomBarActive || !canSendReply)) {
+ 			return true;
+diff --git a/Telegram/SourceFiles/history/view/history_view_context_menu.cpp b/Telegram/SourceFiles/history/view/history_view_context_menu.cpp
+index 3e25a13997..a94f9f72e0 100644
+--- a/Telegram/SourceFiles/history/view/history_view_context_menu.cpp
++++ b/Telegram/SourceFiles/history/view/history_view_context_menu.cpp
+@@ -844,7 +844,7 @@ bool AddReplyToMessageAction(
+ 	const auto canSendReply = topic
+ 		? Data::CanSendAnything(topic)
+ 		: Data::CanSendAnything(peer);
+-	const auto canReply = canSendReply || item->allowsForward();
++	const auto canReply = canSendReply || item->allowsReplyInAnotherChat();
+ 	if (!canReply) {
+ 		return false;
+ 	}
+@@ -2974,7 +2974,7 @@ void AddSelectRestrictionAction(
+ 		not_null<HistoryItem*> item,
+ 		bool addIcon) {
+ 	const auto peer = item->history()->peer;
+-	if ((peer->allowsForwarding() && !item->forbidsForward())
++	if ((peer->allowsForwardingForMe() && !item->forbidsForward())
+ 		|| item->isSponsored()) {
+ 		return;
+ 	}
+diff --git a/Telegram/SourceFiles/history/view/history_view_list_widget.cpp b/Telegram/SourceFiles/history/view/history_view_list_widget.cpp
+index fdbce14135..dadeaa8be4 100644
+--- a/Telegram/SourceFiles/history/view/history_view_list_widget.cpp
++++ b/Telegram/SourceFiles/history/view/history_view_list_widget.cpp
+@@ -6776,7 +6776,8 @@ void ConfirmSendNowSelectedItems(not_null<ListWidget*> widget) {
+ CopyRestrictionType CopyRestrictionTypeFor(
+ 		not_null<PeerData*> peer,
+ 		HistoryItem *item) {
+-	return (peer->allowsForwarding() && (!item || !item->forbidsForward()))
++	return (peer->allowsForwardingForMe()
++			&& (!item || !item->forbidsForward()))
+ 		? CopyRestrictionType::None
+ 		: peer->isUser()
+ 		? CopyRestrictionType::User
+diff --git a/Telegram/SourceFiles/info/media/info_media_provider.cpp b/Telegram/SourceFiles/info/media/info_media_provider.cpp
+index 3d8acd456b..751272694c 100644
+--- a/Telegram/SourceFiles/info/media/info_media_provider.cpp
++++ b/Telegram/SourceFiles/info/media/info_media_provider.cpp
+@@ -81,7 +81,7 @@ Type Provider::type() {
+ bool Provider::hasSelectRestriction() {
+ 	if (_peer->session().frozen()) {
+ 		return true;
+-	} else if (_peer->allowsForwarding()) {
++	} else if (_peer->allowsForwardingForMe()) {
+ 		return false;
+ 	} else if (const auto chat = _peer->asChat()) {
+ 		return !chat->canDeleteMessages();
+diff --git a/Telegram/SourceFiles/iv/iv_instance.cpp b/Telegram/SourceFiles/iv/iv_instance.cpp
+index cda1ea128b..7c85aca9ca 100644
+--- a/Telegram/SourceFiles/iv/iv_instance.cpp
++++ b/Telegram/SourceFiles/iv/iv_instance.cpp
+@@ -155,7 +155,7 @@ struct LocalMarkdownTarget {
+ 
+ [[nodiscard]] bool CanShareMarkdownItem(not_null<HistoryItem*> item) {
+ 	const auto peer = item->history()->peer;
+-	return peer->allowsForwarding() && !item->forbidsForward();
++	return peer->allowsForwardingForMe() && !item->forbidsForward();
+ }
+ 
+ [[nodiscard]] QString RichMessageKey(FullMsgId itemId) {
+diff --git a/Telegram/SourceFiles/media/view/media_view_overlay_widget.cpp b/Telegram/SourceFiles/media/view/media_view_overlay_widget.cpp
+index 2acbe80457..66eaeb5e0a 100644
+--- a/Telegram/SourceFiles/media/view/media_view_overlay_widget.cpp
++++ b/Telegram/SourceFiles/media/view/media_view_overlay_widget.cpp
+@@ -1454,7 +1454,7 @@ bool OverlayWidget::hasCopyMediaRestriction(bool skipPremiumCheck) const {
+ 			? !story->canDownloadIfPremium()
+ 			: !story->canDownloadChecked();
+ 	}
+-	return (_history && !_history->peer->allowsForwarding())
++	return (_history && !_history->peer->allowsForwardingForMe())
+ 		|| (_message && _message->forbidsSaving());
+ }
+ 
+@@ -6074,7 +6074,7 @@ bool OverlayWidget::contentNeedsScreenshotProtection() const {
+ 	if (const auto story = _stories ? _stories->story() : nullptr) {
+ 		return story->forbidsForward();
+ 	}
+-	return (_history && !_history->peer->allowsForwarding())
++	return (_history && !_history->peer->allowsForwardingForMe())
+ 		|| (_message && _message->forbidsSaving());
+ }
+ 
+-- 
+2.52.0.windows.1
+

@@ -1,12 +1,12 @@
-From 93a3906e801862d8ea08d8b79f6a59bc061f6dc6 Mon Sep 17 00:00:00 2001
+From 58370921fd72bc8b831faf4729be8cebfb0f9106 Mon Sep 17 00:00:00 2001
 From: upsoft <13884634+upsoftt@users.noreply.github.com>
 Date: Fri, 31 Jul 2026 19:57:54 +0300
-Subject: [PATCH] =?UTF-8?q?TgTeam:=20=D1=81=D1=81=D1=8B=D0=BB=D0=BA=D0=B0?=
- =?UTF-8?q?=20=D0=BE=D1=82=D0=BA=D1=80=D1=8B=D0=B2=D0=B0=D0=B5=D1=82=D1=81?=
- =?UTF-8?q?=D1=8F=20=D1=82=D0=B5=D0=BC=20=D0=B0=D0=BA=D0=BA=D0=B0=D1=83?=
- =?UTF-8?q?=D0=BD=D1=82=D0=BE=D0=BC,=20=D0=BA=D0=BE=D1=82=D0=BE=D1=80?=
- =?UTF-8?q?=D1=8B=D0=B9=20=D1=87=D0=B8=D1=82=D0=B0=D0=B5=D1=82=20=D1=87?=
- =?UTF-8?q?=D0=B0=D1=82?=
+Subject: [PATCH 3/6] =?UTF-8?q?TgTeam:=20=D1=81=D1=81=D1=8B=D0=BB=D0=BA?=
+ =?UTF-8?q?=D0=B0=20=D0=BE=D1=82=D0=BA=D1=80=D1=8B=D0=B2=D0=B0=D0=B5=D1=82?=
+ =?UTF-8?q?=D1=81=D1=8F=20=D1=82=D0=B5=D0=BC=20=D0=B0=D0=BA=D0=BA=D0=B0?=
+ =?UTF-8?q?=D1=83=D0=BD=D1=82=D0=BE=D0=BC,=20=D0=BA=D0=BE=D1=82=D0=BE?=
+ =?UTF-8?q?=D1=80=D1=8B=D0=B9=20=D1=87=D0=B8=D1=82=D0=B0=D0=B5=D1=82=20?=
+ =?UTF-8?q?=D1=87=D0=B0=D1=82?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -29,21 +29,21 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
  1 file changed, 65 insertions(+), 2 deletions(-)
 
 diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
-index 8abdb27f40..61937c0c40 100644
+index 91f1901c..3f27df58 100644
 --- a/submodules/TelegramUI/Sources/AppDelegate.swift
 +++ b/submodules/TelegramUI/Sources/AppDelegate.swift
-@@ -1513,10 +1513,16 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -1567,10 +1567,16 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
          })
          
          if let url = launchOptions?[.url] {
 +            // TgTeam: холодный старт по ссылке идёт мимо openUrl(url:), поэтому
 +            // номер аккаунта разбирается и здесь.
-             if let url = url as? URL, url.scheme == "tg" || url.scheme == buildConfig.appSpecificUrlScheme {
+             if let url = url as? URL, url.scheme == "tg" || url.scheme == "ton" || url.scheme == buildConfig.appSpecificUrlScheme || WalletContext.isTonConnectUrl(url.absoluteString) {
 -                self.openUrlWhenReady(url: url, external: true)
 +                if !self.openUrlWithRequestedAccount(url: url, external: true) {
 +                    self.openUrlWhenReady(url: url, external: true)
 +                }
-             } else if let urlString = url as? String, urlString.lowercased().hasPrefix("tg:") || urlString.lowercased().hasPrefix("\(buildConfig.appSpecificUrlScheme):"), let url = URL(string: urlString) {
+             } else if let urlString = url as? String, urlString.lowercased().hasPrefix("tg:") || urlString.lowercased().hasPrefix("ton:") || urlString.lowercased().hasPrefix("\(buildConfig.appSpecificUrlScheme):") || WalletContext.isTonConnectUrl(urlString), let url = URL(string: urlString) {
 -                self.openUrlWhenReady(url: url, external: true)
 +                if !self.openUrlWithRequestedAccount(url: url, external: true) {
 +                    self.openUrlWhenReady(url: url, external: true)
@@ -51,9 +51,9 @@ index 8abdb27f40..61937c0c40 100644
              }
          }
          
-@@ -2500,6 +2506,11 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -2598,6 +2604,11 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
      }
-     
+ 
      private func openUrl(url: URL) {
 +        // TgTeam: ссылка с номером аккаунта уходит на отдельный путь — он
 +        // сначала переключает аккаунт, а потом открывает её уже без параметра.
@@ -63,10 +63,10 @@ index 8abdb27f40..61937c0c40 100644
          let _ = (self.sharedContextPromise.get()
          |> take(1)
          |> mapToSignal { sharedApplicationContext -> Signal<(SharedAccountContextImpl, AuthorizedApplicationContext?, UnauthorizedApplicationContext?), NoError> in
-@@ -2807,6 +2818,58 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -2963,6 +2974,58 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
          }))
      }
-     
+ 
 +    // TgTeam: ссылку с параметром account открывает тот аккаунт, который читает
 +    // чат, а не текущий активный. Параметр наш, апстримный разбор ссылок его не
 +    // знает, поэтому он вырезается — дальше ссылка идёт обычным путём.
@@ -123,5 +123,5 @@ index 8abdb27f40..61937c0c40 100644
      private func openUrlWhenReady(accountId: AccountRecordId? = nil, url: URL, external: Bool = false) {
          self.openUrlInProgress = url
 -- 
-2.50.1 (Apple Git-155)
+2.52.0.windows.1
 

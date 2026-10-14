@@ -10,9 +10,12 @@
    клиент на указанный аккаунт, потом открывает сообщение. У Telegram такой возможности
    нет вовсе: `tg://`-ссылка открывается тем аккаунтом, который активен в этот момент.
 
-Всё остальное — обычный Telegram: тот же код, те же серверы, то же шифрование.
-Правки занимают около пятисот строк в двадцати шести файлах (сотня из них — описание
-набора иконок), их полный текст лежит в `patches/` и читается глазами за один присест.
+И несколько удобств для работы: администратор может переслать и сохранить пост из своего
+канала с запретом копирования, а код подтверждения копируется прямо из уведомления, не
+открывая чат.
+
+Всё остальное — обычный Telegram: тот же код, те же серверы, то же шифрование. Полный
+текст правок лежит в `patches/`, разбор каждой — в [`docs/changes.md`](docs/changes.md).
 
 ## Скачать
 
@@ -42,27 +45,31 @@ Windows-сборка **портативная**: распаковать в лю�
 
 | Платформа | Версия Telegram | Дата версии | Заметки Telegram |
 |---|---|---|---|
-| Windows | Telegram Desktop **7.1.1** | 22 августа 2026 | [заметки к версии](https://github.com/telegramdesktop/tdesktop/releases/tag/v7.1.1) |
-| iPhone | Telegram for iOS **12.9.2** (раздаётся как сборка 5) | 17 июля 2026 | [анонс от 14 июля 2026](https://telegram.org/blog/communities-editor-invisible-messages) |
+| Windows | Telegram Desktop **7.3.1** | 10 октября 2026 | [заметки к версии](https://github.com/telegramdesktop/tdesktop/releases/tag/v7.3.1) |
+| iPhone | Telegram for iOS **12.9.2** (по общей ссылке раздаётся сборка 5) | 17 июля 2026 | [анонс от 14 июля 2026](https://telegram.org/blog/communities-editor-invisible-messages) |
 
-Номер сборки здесь совпадает с номером версии Telegram: `TelegramTeam-7.1.1` — это Telegram
-Desktop 7.1.1 плюс восемь патчей из `patches/desktop`. Правки лежат отдельными коммитами
+Номер сборки здесь совпадает с номером версии Telegram: `TelegramTeam-7.3.1` — это Telegram
+Desktop 7.3.1 плюс двенадцать патчей из `patches/desktop`. Правки лежат отдельными коммитами
 поверх стабильного тега, поэтому переход на новую версию Telegram — это `git merge` нового
 тега, а не перенос изменений руками, и обновления от Telegram не задерживаются.
 
-**Что сам Telegram добавил в 7.1** (Windows, по его заметкам к версии):
+Патчи iPhone в `patches/ios` уже перенесены на Telegram for iOS 13.0. По общей ссылке
+TestFlight пока раздаётся сборка 5 на 12.9.2; её исходники — патчи `patches/ios` в
+коммите `a956604` этого репозитория.
 
-- приветственные сообщения для групп и каналов;
-- кнопки и блоки с файлами в оформленных сообщениях, аккуратнее списки, таблицы и вставка
-  разметки в редакторе;
-- таймер самоуничтожения и просмотр «один раз» для фото и видео;
-- видео вместо аватарки — себе, чатам и каналам;
-- видеоредактор: обрезка, качество и выбор кадра для обложки;
-- восстановление открытых окон и чатов при перезапуске;
-- отправка музыки из меню вложений;
-- новый тип прокси WEB в настройках соединения.
+**Что сам Telegram добавил с 7.1** (Windows, по его заметкам к версиям):
 
-Сама 7.1.1 поверх этого чинит загрузку чатов у части пользователей и мелкие ошибки.
+- **7.3** — деньги прямо в клиенте: кошелёк, перевод собеседнику, история переводов,
+  передача и продажа коллекционных подарков, вход в приложения через TON Connect;
+  кошелёк можно закрыть паролем или Windows Hello;
+- **7.2.6–7.2.10** — текст со шрифтами и выравниванием в редакторе картинок, папка или
+  набор файлов отправляются одним архивом, правка GIF перед отправкой, оценка звонка
+  звёздами, свои эмодзи из видеостикеров, эмодзи Unicode 17, отправка оформленного
+  сообщения по Ctrl+Enter, аудио в таком сообщении играют плейлистом;
+- **7.2** — новая система обновлений самого Telegram (в этой сборке автообновления нет).
+
+Сама 7.3.1 поверх этого чинит шифрование кошелька через Windows Hello, цвета дат в
+некоторых темах и не даёт защищённым от копирования файлам попадать в «Загрузки».
 
 **Что Telegram анонсировал в 12.9** (iPhone): редактор оформленного текста для статей и
 длинных постов (таблицы, списки, заголовки, до 32 000 знаков в сообщении), «Сообщества» —
@@ -73,7 +80,7 @@ Desktop 7.1.1 плюс восемь патчей из `patches/desktop`. Пра�
 
 Подробный разбор — [`docs/changes.md`](docs/changes.md). Коротко:
 
-### Windows (`patches/desktop`, поверх тега `v7.1.1`)
+### Windows (`patches/desktop`, поверх тега `v7.3.1`)
 
 | Файл | Что меняется |
 |---|---|
@@ -85,8 +92,11 @@ Desktop 7.1.1 плюс восемь патчей из `patches/desktop`. Пра�
 | `Telegram/CMakeLists.txt` | имя выходного файла |
 | `config.h`, `Telegram/CMakeLists.txt` и три места использования | ключ приложения попадает в сборку уже перемешанным и не лежит в файле открытым текстом |
 | `data_premium_limits.cpp` | закрепление чатов не режется подпиской: клиент всегда берёт больший предел (окончательный предел всё равно ставит сервер) |
+| `Resources/winrc/Telegram.rc` | в свойствах файла издателем указана эта сборка, а не Telegram FZ-LLC |
+| `data_peer.*`, `history_item.*`, `api/api_protected_copy.*` и проверки кнопок | администратор канала или группы с запретом копирования может сохранять, копировать и пересылать посты; пересылка идёт копией, потому что сервер защищённую пересылку отклоняет |
+| `window/notifications_manager*`, `platform/win/notifications_manager_win.cpp` | код подтверждения копируется кнопкой прямо из уведомления, чат не открывается |
 
-### iPhone (`patches/ios`)
+### iPhone (`patches/ios`, поверх `release-13.0.0`)
 
 | Файл | Что меняется |
 |---|---|
@@ -94,6 +104,8 @@ Desktop 7.1.1 плюс восемь патчей из `patches/desktop`. Пра�
 | `Telegram/BUILD` | своя схема ссылок и свой набор иконок |
 | `AppDelegate.swift` | параметр `account` переключает аккаунт — и при холодном старте тоже |
 | `UrlHandling.swift`, `OpenUrl.swift` | ссылка несёт номер сообщения и текст ответа сразу |
+| `PeerUtils.swift`, `TgTeamProtectedCopy.swift` и соседи | запрет копирования снят, пересылка идёт копией (такие сборки раздаются только своей команде) |
+| `StoryItemSetContainerComponent.swift` | лента сториз стоит на паузе под любым другим экраном и не играет звуком под новой |
 
 Правки лежат отдельными коммитами поверх стабильного тега апстрима, поэтому переход на
 новую версию Telegram — это `git merge` нового тега, а не перенос изменений руками.
@@ -143,10 +155,10 @@ scripts/mac/run-build.sh <номер сборки>
 компилятора: патчи должны лечь на чистый тег апстрима без единого конфликта.
 
 ```sh
-git clone --depth 1 --branch v7.1.1 https://github.com/telegramdesktop/tdesktop.git
+git clone --depth 1 --branch v7.3.1 https://github.com/telegramdesktop/tdesktop.git
 cd tdesktop
 git am --keep-cr ../telegram-team/patches/desktop/*.patch
-git log --oneline -6      # пять наших коммитов поверх «Version 7.1.1»
+git log --oneline -13     # двенадцать наших коммитов поверх «Version 7.3.1»
 ```
 
 Флаг `--keep-cr` обязателен, а `.gitattributes` в этом репозитории помечает `*.patch`
@@ -175,16 +187,19 @@ Telegram Desktop распространяется под **GPLv3** (с искл�
 ## English summary
 
 An unofficial build of Telegram for Windows and iPhone, made from the original upstream
-sources (`telegramdesktop/tdesktop` and `TelegramMessenger/Telegram-iOS`, stable tags) with
-two changes: the account limit is raised to 50, and a `tgteam://…&account=<user id>` link
-switches to the given account before opening a chat or message.
+sources (`telegramdesktop/tdesktop` and `TelegramMessenger/Telegram-iOS`, stable tags). The
+account limit is raised to 50, a `tgteam://…&account=<user id>` link switches to the given
+account before opening a chat or message, an admin can forward and save posts from their own
+copy-protected channel, and a confirmation code is copied straight from the notification.
 
-Current base versions: **Telegram Desktop 7.1.1** (released 22 August 2026) for Windows and
-**Telegram for iOS 12.9.2** (17 July 2026) for iPhone — everything Telegram shipped in those
-releases is present here.
+Current base versions: **Telegram Desktop 7.3.1** (released 10 October 2026) for Windows and
+**Telegram for iOS 12.9.2** (17 July 2026) for the public iPhone link — everything Telegram
+shipped in those releases is present here. The iPhone patches are already moved to
+Telegram for iOS 13.0.
 
-All modifications are in `patches/` — fewer than 500 lines across 25 files. No telemetry,
-no analytics, no auto-update, no third-party fork in the base.
+All modifications are in `patches/` — about two thousand lines, most of them the
+copy-protected forwarding. No telemetry, no analytics, no auto-update, no third-party fork
+in the base.
 
 Telegram Desktop is GPLv3 (with the OpenSSL exception), Telegram-iOS is GPLv2; both allow
 modification and redistribution provided the modified source is published — which is what

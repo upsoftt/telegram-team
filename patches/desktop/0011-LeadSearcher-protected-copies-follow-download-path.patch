@@ -1,0 +1,122 @@
+From d4259f2c0d617a474b48961bb0b67d99c3f41e20 Mon Sep 17 00:00:00 2001
+From: upsoft <13884634+upsoftt@users.noreply.github.com>
+Date: Tue, 6 Oct 2026 10:48:09 +0300
+Subject: [PATCH 11/12] LeadSearcher: protected copies follow the chosen
+ download path
+
+With a download path set in the settings, copies go to <that folder>\protected_copies,
+next to the files the user saves; with the default or the temporary choice they
+stay next to the client's data. A copy's folder is recognized by the root's name,
+so a path changed during a send doesn't leave its files behind, and an
+unavailable download disk falls back to the client's folder.
+---
+ .../SourceFiles/api/api_protected_copy.cpp    | 58 ++++++++++++++-----
+ 1 file changed, 43 insertions(+), 15 deletions(-)
+
+diff --git a/Telegram/SourceFiles/api/api_protected_copy.cpp b/Telegram/SourceFiles/api/api_protected_copy.cpp
+index fefa6c3496..f8b209f673 100644
+--- a/Telegram/SourceFiles/api/api_protected_copy.cpp
++++ b/Telegram/SourceFiles/api/api_protected_copy.cpp
+@@ -12,6 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "base/random.h"
+ #include "base/timer.h"
+ #include "core/application.h"
++#include "core/core_settings.h"
++#include "core/file_utilities.h"
+ #include "data/data_document.h"
+ #include "data/data_document_media.h"
+ #include "data/data_file_origin.h"
+@@ -100,11 +102,23 @@ void ShowToast(const QString &text) {
+ 	}
+ }
+ 
+-// Copies lie next to the client's own data and not in %TEMP%: a copied
+-// course is tens of gigabytes a day, and the system disk is usually the
+-// smallest one (05.10.2026 it held 29 GB of copies with 9 GB left free).
++// Copies are never put into %TEMP%: a copied course is tens of gigabytes a
++// day, and the system disk is usually the smallest one (05.10.2026 it held
++// 29 GB of copies with 9 GB left free). They go where the user told the
++// client to save files ("Download path" in the settings), and with the
++// default or the temporary choice, next to the client's own data.
++const auto kCopiesFolder = u"protected_copies"_q;
++
++[[nodiscard]] QString WorkingDirCopiesRoot() {
++	return cWorkingDir() + kCopiesFolder;
++}
++
+ [[nodiscard]] QString CopiesRoot() {
+-	return cWorkingDir() + u"protected_copies"_q;
++	const auto path = Core::App().settings().downloadPath();
++	if (path.isEmpty() || path == FileDialog::Tmp()) {
++		return WorkingDirCopiesRoot();
++	}
++	return QDir(path).filePath(kCopiesFolder);
+ }
+ 
+ // Where copies were kept before, swept the same way until it is empty.
+@@ -115,7 +129,14 @@ void ShowToast(const QString &text) {
+ void RemoveOldCopies() {
+ 	const auto border = QDateTime::currentDateTime().addSecs(
+ 		-kKeepCopiesSeconds);
+-	for (const auto &root : { CopiesRoot(), LegacyCopiesRoot() }) {
++	// The download path may have changed since: the root it had then is
++	// swept as well.
++	const auto roots = {
++		CopiesRoot(),
++		WorkingDirCopiesRoot(),
++		LegacyCopiesRoot(),
++	};
++	for (const auto &root : roots) {
+ 		auto dirs = QDir(root).entryInfoList(
+ 			QDir::Dirs | QDir::NoDotAndDotDot);
+ 		for (const auto &info : dirs) {
+@@ -126,17 +147,20 @@ void RemoveOldCopies() {
+ 	}
+ }
+ 
+-// Every copy has a folder of its own right inside the root (MakeCopyPath),
+-// so the folder goes together with the file. Anything else is left alone:
+-// a document already saved by the user is reused as is and isn't ours.
++// Every copy has a folder of its own right inside a "protected_copies"
++// root (MakeCopyPath), so the folder goes together with the file. The root
++// is recognized by name, not by the current setting: the user may change
++// the download path while a copy is being sent. Anything else is left
++// alone: a document already saved by the user is reused as is and isn't
++// ours.
+ void RemoveCopy(const QString &path) {
+ 	if (path.isEmpty()) {
+ 		return;
+ 	}
+ 	const auto folder = QFileInfo(path).absolutePath();
+-	const auto parent = QFileInfo(folder).absolutePath();
+-	if (QDir::cleanPath(parent).compare(
+-			QDir::cleanPath(CopiesRoot()),
++	const auto root = QFileInfo(folder).absolutePath();
++	if (QFileInfo(root).fileName().compare(
++			kCopiesFolder,
+ 			Qt::CaseInsensitive) == 0) {
+ 		QDir(folder).removeRecursively();
+ 	}
+@@ -154,11 +178,15 @@ void RemoveCopy(const QString &path) {
+ 
+ // Each file gets its own folder, so the recipient sees the original name
+ // and two files with one name never collide.
++// A download path on a disk that is gone or read-only falls back to the
++// client's own folder rather than failing the copy.
+ [[nodiscard]] QString MakeCopyPath(const QString &name) {
+-	const auto folder = CopiesRoot()
+-		+ '/'
+-		+ QString::number(base::RandomValue<uint64>(), 16);
+-	QDir().mkpath(folder);
++	const auto id = QString::number(base::RandomValue<uint64>(), 16);
++	auto folder = CopiesRoot() + '/' + id;
++	if (!QDir().mkpath(folder)) {
++		folder = WorkingDirCopiesRoot() + '/' + id;
++		QDir().mkpath(folder);
++	}
+ 	return folder + '/' + name;
+ }
+ 
+-- 
+2.52.0.windows.1
+
