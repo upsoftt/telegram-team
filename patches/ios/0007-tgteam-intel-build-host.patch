@@ -1,12 +1,17 @@
-From ba9f78c5d19d7935009267039934d474b6864fff Mon Sep 17 00:00:00 2001
+From 83e96350d5c9fa8117a8bb0ca1bec9bd3fee9727 Mon Sep 17 00:00:00 2001
 From: upsoft <13884634+upsoftt@users.noreply.github.com>
 Date: Wed, 14 Oct 2026 13:18:16 +0300
-Subject: [PATCH] TgTeam: wasi-sdk for an Intel build host
+Subject: [PATCH 7/7] TgTeam: Intel build host (Bazel and wasi-sdk for x86_64)
+
+Only for building on an Intel Mac; on Apple silicon this patch is not applied.
+
+versions.json carries the checksum of the arm64 Bazel binary, so on an Intel Mac the build deletes the downloaded x86_64 Bazel as "wrong" and stops. The checksum of the official x86_64 file is used instead.
 
 Telegram 13.0 compiles the reference call core to WebAssembly with wasi-sdk, and the macOS archive it fetches is arm64-only: on an Intel Mac the genrule fails with "Bad CPU type in executable". The x86_64 archive of the same wasi-sdk 33 release is used instead, checksum from the GitHub release.
 ---
- MODULE.bazel | 6 +++---
- 1 file changed, 3 insertions(+), 3 deletions(-)
+ MODULE.bazel  | 6 +++---
+ versions.json | 2 +-
+ 2 files changed, 4 insertions(+), 4 deletions(-)
 
 diff --git a/MODULE.bazel b/MODULE.bazel
 index 49ea1049..acd0064c 100644
@@ -25,6 +30,18 @@ index 49ea1049..acd0064c 100644
      build_file_content = _WASI_SDK_BUILD,
  )
  
+diff --git a/versions.json b/versions.json
+index 0a590e9a..d03a0ae5 100644
+--- a/versions.json
++++ b/versions.json
+@@ -2,6 +2,6 @@
+     "app": "13.0",
+     "xcode": "26.6",
+     "deploy_xcode": "26.2",
+-    "bazel": "9.2.0:dd466352a3e4d3581b8898740ee1ff208866ccbe25f8d367c5dcb950219587e6",
++    "bazel": "9.2.0:14c9bcb01303b38192e0e2895051c1bcf19bf89d7e416f5aeeeb48b6b624cfbf",
+     "macos": "26"
+ }
 -- 
-2.50.1 (Apple Git-155)
+2.52.0.windows.1
 
