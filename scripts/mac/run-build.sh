@@ -32,15 +32,16 @@ if ! security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"; then
 fi
 security set-keychain-settings "$KEYCHAIN"
 
-# Make.py и Bazel слушают только xcode-select, а не DEVELOPER_DIR. Если системный
-# Xcode 27, а собирать надо 26.x (с SDK iOS 27 приложению без сцен
-# грозит падение на старте), поэтому на время сборки Xcode переключается и
-# возвращается на выходе.
+# Make.py сверяет Xcode через xcode-select. Явный DEVELOPER_DIR позволяет
+# Bazel заново определить SDK, если Xcode обновился по прежнему пути.
 if [ -n "$TGTEAM_XCODE" ]; then
 	PREV_XCODE=$(xcode-select -p)
 	sudo xcode-select -s "$TGTEAM_XCODE" || exit 1
 	trap 'code=$?; sudo xcode-select -s "$PREV_XCODE"; echo "$code" > "$HOME/tgteam-build.status"' EXIT
 fi
+
+DEVELOPER_DIR=$(env -u DEVELOPER_DIR xcode-select -p) || exit 1
+export DEVELOPER_DIR
 
 cd "$HOME/Projects/Telegram-iOS" || exit 1
 # Версия Bazel меняется вместе с апстримом (8.4.2 до 13.0, 9.2.0 с 13.0), а
@@ -48,8 +49,7 @@ cd "$HOME/Projects/Telegram-iOS" || exit 1
 for bazel in ./build-input/bazel-*-darwin-*; do
 	[ -x "$bazel" ] && "$bazel" shutdown >/dev/null 2>&1
 done
-# Telegram 13.0 объявляет Xcode 26.6, у нас 26.2: Make.py без флага
-# останавливается на сверке версии, с ним берёт выбранный Xcode.
+# Разрешаем использовать установленное обновление Xcode.
 python3 build-system/Make/Make.py --overrideXcodeVersion --cacheDir="$HOME/telegram-bazel-cache" build \
   --configurationPath=build-system/tgteam-configuration.json \
   --buildNumber="$BUILD_NUMBER" --configuration=release_arm64 \
