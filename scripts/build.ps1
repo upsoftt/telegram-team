@@ -280,13 +280,19 @@ if ($Sources) {
 
 if ($Prepare) {
     # Самый долгий этап: Qt, WebRTC, ffmpeg, OpenSSL собираются из исходников.
+    $prepareScript = Join-Path $sourcePath 'Telegram\build\prepare\win.bat'
+    # Апстрим обновляет каталог patches первым этапом. Устанавливаем его
+    # до локальных исправлений, чтобы полный проход их не затёр.
+    if ($Tag -eq 'v7.4.6') {
+        Invoke-InBuildEnvironment $Root "`"$prepareScript`" silent patches"
+    }
     Repair-LibvpxDebugAssembly
     Repair-FfmpegMsvcProbe
     Write-Step 'Готовлю сторонние библиотеки (несколько часов)'
     # silent = отвечать «пересобрать» самому. Без него скрипт Telegram на любой
     # изменившейся библиотеке задаёт вопрос в консоль и ждёт нажатия клавиши —
     # в фоновом запуске это выглядит как зависшая сборка.
-    Invoke-InBuildEnvironment $Root "`"$sourcePath\Telegram\build\prepare\win.bat`" silent$qtArgument"
+    Invoke-InBuildEnvironment $Root "`"$prepareScript`" silent$qtArgument"
     Write-Step 'Библиотеки готовы'
 }
 
