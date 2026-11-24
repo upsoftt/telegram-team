@@ -1,9 +1,8 @@
 # Сборка под iPhone
 
-Собирается из оригинальных исходников `TelegramMessenger/Telegram-iOS`; патчи из
-`patches/ios` накатываются поверх апстрима — они сняты с ветки **`release-13.0.0`**, на более
-свежей апстримной версии часть контекста может не совпасть и патчи придётся перевыпустить. Нужен Mac с Xcode — других вариантов нет,
-сборка идёт через Bazel и подписывается системными средствами Apple.
+Сборка использует оригинальные исходники `TelegramMessenger/Telegram-iOS` на теге
+`release-13.2` и патч `patches/ios/release-13.2`. На Intel Mac требуется дополнительный
+патч из `patches/ios/intel/release-13.2`. Сборка идёт через Bazel и подписывается Xcode.
 
 ## Что нужно
 
@@ -97,8 +96,8 @@ codesign -dv "$APP" 2>&1 | grep -E "Identifier|TeamIdentifier"
 | Иконку приложения нельзя вернуть после выбора другой | первая плитка помечается основной только для сборок App Store (`isDefault: buildConfig.isAppStoreBuild`), а сброс делается только выбором основной |
 | Ожидание конца сборки не срабатывает | `pgrep -f "Make.py"` находит сам себя, если строка есть в командной строке ждущего цикла. Ждать по файлу-признаку |
 | `cannot execute tool 'metal' due to missing Metal Toolchain` | с Telegram 13.0 в сборке есть шейдеры Metal, а Xcode 26 ставит их компилятор отдельной загрузкой: `xcodebuild -downloadComponent MetalToolchain`, около 700 МБ, один раз |
-| `wasi_sdk_macos/bin/clang++: Bad CPU type in executable` на `reference_core_wasm` | с 13.0 ядро звонков собирается в WebAssembly, и апстрим качает wasi-sdk только под процессоры Apple. На Intel-машине нужен архив `x86_64-macos` того же выпуска: это делает `patches/ios/0007`. На Mac с процессором Apple этот патч не накатывается: он сломал бы проверку Bazel |
-| Make.py останавливается на сверке версии Xcode | Telegram 13.0 объявляет Xcode 26.6; с более ранним Xcode сборка идёт с флагом `--overrideXcodeVersion` |
+| `wasi_sdk_macos/bin/clang++: Bad CPU type in executable` на `reference_core_wasm` | с 13.0 ядро звонков собирается в WebAssembly, и апстрим качает wasi-sdk только под процессоры Apple. На Intel-машине нужен архив `x86_64-macos` того же выпуска: это делает `patches/ios/intel/release-13.2`. На Mac с процессором Apple этот патч не накатывается: он сломал бы проверку Bazel |
+| Make.py останавливается на сверке версии Xcode | Telegram 13.2 объявляет Xcode 27.1; с Xcode 27.2 сборка идёт с флагом `--overrideXcodeVersion` |
 | Ссылка своей схемы не открывает приложение | список схем берётся из `Telegram/BUILD` (`UrlTypesInfoPlist`), а `Telegram/Telegram-iOS/Info.plist` в сборке Bazel не участвует вовсе |
 
 ## Раздача
