@@ -1,0 +1,324 @@
+diff --git a/tgcalls/NetworkManager.cpp b/tgcalls/NetworkManager.cpp
+index b1dd589..170c152 100644
+--- a/tgcalls/NetworkManager.cpp
++++ b/tgcalls/NetworkManager.cpp
+@@ -1,6 +1,7 @@
+ #include "NetworkManager.h"
+ 
+ #include "Message.h"
++#include "Socks5Proxy.h"
+ 
+ #include "p2p/base/basic_packet_socket_factory.h"
+ #include "v2/ReflectorRelayPortFactory.h"
+@@ -27,41 +28,6 @@ extern "C" {
+ 
+ namespace tgcalls {
+ 
+-class TgCallsCryptStringImpl : public rtc::CryptStringImpl {
+-public:
+-    TgCallsCryptStringImpl(std::string const &value) :
+-    _value(value) {
+-    }
+-    
+-    virtual ~TgCallsCryptStringImpl() override {
+-    }
+-    
+-    virtual size_t GetLength() const override {
+-        return _value.size();
+-    }
+-    
+-    virtual void CopyTo(char* dest, bool nullterminate) const override {
+-        memcpy(dest, _value.data(), _value.size());
+-        if (nullterminate) {
+-            dest[_value.size()] = 0;
+-        }
+-    }
+-    virtual std::string UrlEncode() const override {
+-        return _value;
+-    }
+-    virtual CryptStringImpl* Copy() const override {
+-        return new TgCallsCryptStringImpl(_value);
+-    }
+-    
+-    virtual void CopyRawTo(std::vector<unsigned char>* dest) const override {
+-        dest->resize(_value.size());
+-        memcpy(dest->data(), _value.data(), _value.size());
+-    }
+-    
+-private:
+-    std::string _value;
+-};
+-
+ NetworkManager::NetworkManager(
+ 	rtc::Thread *thread,
+ 	EncryptionKey encryptionKey,
+@@ -130,7 +96,7 @@ void NetworkManager::start() {
+     if (!_enableTCP) {
+         flags |= cricket::PORTALLOCATOR_DISABLE_TCP;
+     }
+-    if (!_enableP2P) {
++    if (_proxy || !_enableP2P) {
+         flags |= cricket::PORTALLOCATOR_DISABLE_UDP;
+         flags |= cricket::PORTALLOCATOR_DISABLE_STUN;
+         uint32_t candidateFilter = _portAllocator->candidate_filter();
+@@ -141,12 +107,8 @@ void NetworkManager::start() {
+     _portAllocator->set_step_delay(cricket::kMinimumStepDelay);
+     
+     if (_proxy) {
+-        rtc::ProxyInfo proxyInfo;
+-        proxyInfo.type = rtc::ProxyType::PROXY_SOCKS5;
+-        proxyInfo.address = rtc::SocketAddress(_proxy->host, _proxy->port);
+-        proxyInfo.username = _proxy->login;
+-        proxyInfo.password = rtc::CryptString(TgCallsCryptStringImpl(_proxy->password));
+-        _portAllocator->set_proxy("t/1.0", proxyInfo);
++        _portAllocator->set_proxy("t/1.0", Socks5ProxyInfo(*_proxy));
++        _portAllocator->SetCandidateFilter(cricket::CF_RELAY);
+     }
+     
+     _portAllocator->set_flags(flags);
+@@ -156,7 +118,7 @@ void NetworkManager::start() {
+     std::vector<cricket::RelayServerConfig> turnServers;
+ 
+     for (auto &server : _rtcServers) {
+-        if (server.isTcp) {
++        if (_proxy ? (!server.isTurn || !server.isTcp) : server.isTcp) {
+             continue;
+         }
+         
+@@ -165,7 +127,7 @@ void NetworkManager::start() {
+                 rtc::SocketAddress(server.host, server.port),
+                 server.login,
+                 server.password,
+-                cricket::PROTO_UDP
++                server.isTcp ? cricket::PROTO_TCP : cricket::PROTO_UDP
+             ));
+         } else {
+             rtc::SocketAddress stunAddress = rtc::SocketAddress(server.host, server.port);
+diff --git a/tgcalls/Socks5Proxy.h b/tgcalls/Socks5Proxy.h
+new file mode 100644
+index 0000000..f8c6c98
+--- /dev/null
++++ b/tgcalls/Socks5Proxy.h
+@@ -0,0 +1,44 @@
++#pragma once
++
++#include "Instance.h"
++#include "rtc_base/proxy_info.h"
++#include <cstring>
++
++namespace tgcalls {
++
++class TgCallsCryptStringImpl : public rtc::CryptStringImpl {
++public:
++    explicit TgCallsCryptStringImpl(const std::string &value) : _value(value) {
++    }
++    size_t GetLength() const override {
++        return _value.size();
++    }
++    void CopyTo(char *dest, bool terminate) const override {
++        memcpy(dest, _value.data(), _value.size());
++        if (terminate) {
++            dest[_value.size()] = 0;
++        }
++    }
++    std::string UrlEncode() const override {
++        return _value;
++    }
++    rtc::CryptStringImpl *Copy() const override {
++        return new TgCallsCryptStringImpl(_value);
++    }
++    void CopyRawTo(std::vector<unsigned char> *dest) const override {
++        dest->assign(_value.begin(), _value.end());
++    }
++private:
++    std::string _value;
++};
++
++inline rtc::ProxyInfo Socks5ProxyInfo(const Proxy &proxy) {
++    rtc::ProxyInfo result;
++    result.type = rtc::ProxyType::PROXY_SOCKS5;
++    result.address = rtc::SocketAddress(proxy.host, proxy.port);
++    result.username = proxy.login;
++    result.password = rtc::CryptString(TgCallsCryptStringImpl(proxy.password));
++    return result;
++}
++
++}
+diff --git a/tgcalls/v2/InstanceV2CompatImpl.cpp b/tgcalls/v2/InstanceV2CompatImpl.cpp
+index 64942a4..d8b78c2 100644
+--- a/tgcalls/v2/InstanceV2CompatImpl.cpp
++++ b/tgcalls/v2/InstanceV2CompatImpl.cpp
+@@ -1,4 +1,5 @@
+ #include "v2/InstanceV2CompatImpl.h"
++#include "Socks5Proxy.h"
+ 
+ #include "LogSinkImpl.h"
+ #include "VideoCaptureInterfaceImpl.h"
+@@ -598,6 +599,13 @@ public:
+ 
+         auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+ 
++        if (_proxy) {
++            portAllocator->set_proxy("t/1.0", Socks5ProxyInfo(*_proxy));
++            portAllocator->set_flags(portAllocator->flags()
++                | cricket::PORTALLOCATOR_DISABLE_UDP | cricket::PORTALLOCATOR_DISABLE_STUN);
++            portAllocator->SetCandidateFilter(cricket::CF_RELAY);
++        }
++
+         if (getCustomParameterBool(_customParameters, "network_disable_stun_when_unconfigured")) {
+             bool hasStunServer = false;
+             for (const auto &server : _rtcServers) {
+@@ -628,7 +636,7 @@ public:
+         peerConnectionDependencies.allocator = std::move(portAllocator);
+ 
+         webrtc::PeerConnectionInterface::RTCConfiguration peerConnectionConfiguration;
+-        if (_enableP2P) {
++        if (_enableP2P && !_proxy) {
+             peerConnectionConfiguration.type = webrtc::PeerConnectionInterface::IceTransportsType::kAll;
+         } else {
+             peerConnectionConfiguration.type = webrtc::PeerConnectionInterface::IceTransportsType::kRelay;
+@@ -644,7 +652,7 @@ public:
+         peerConnectionConfiguration.prioritize_most_likely_ice_candidate_pairs = true;
+ 
+         for (auto &server : _rtcServers) {
+-            if (server.isTcp) {
++            if (_proxy ? (!server.isTurn || !server.isTcp) : server.isTcp) {
+                 continue;
+             }
+ 
+@@ -665,7 +673,8 @@ public:
+                 webrtc::PeerConnectionInterface::IceServer mappedServer;
+ 
+                 mappedServer.urls.push_back(
+-                    "turn:" + address.HostAsURIString() + ":" + std::to_string(server.port));
++                    "turn:" + address.HostAsURIString() + ":" + std::to_string(server.port)
++                    + (server.isTcp ? "?transport=tcp" : "?transport=udp"));
+                 mappedServer.username = server.login;
+                 mappedServer.password = server.password;
+ 
+diff --git a/tgcalls/v2/InstanceV2ReferenceImpl.cpp b/tgcalls/v2/InstanceV2ReferenceImpl.cpp
+index dbaf093..ee4638f 100644
+--- a/tgcalls/v2/InstanceV2ReferenceImpl.cpp
++++ b/tgcalls/v2/InstanceV2ReferenceImpl.cpp
+@@ -1,4 +1,5 @@
+ #include "v2/InstanceV2ReferenceImpl.h"
++#include "Socks5Proxy.h"
+ 
+ #include "LogSinkImpl.h"
+ #include "VideoCaptureInterfaceImpl.h"
+@@ -667,6 +668,13 @@ public:
+         
+         auto portAllocator = std::make_unique<cricket::BasicPortAllocator>(_networkManager.get(), _socketFactory.get(), nullptr, _relayPortFactory.get());
+ 
++        if (_proxy) {
++            portAllocator->set_proxy("t/1.0", Socks5ProxyInfo(*_proxy));
++            portAllocator->set_flags(portAllocator->flags()
++                | cricket::PORTALLOCATOR_DISABLE_UDP | cricket::PORTALLOCATOR_DISABLE_STUN);
++            portAllocator->SetCandidateFilter(cricket::CF_RELAY);
++        }
++
+         if (getCustomParameterBool(_customParameters, "network_disable_stun_when_unconfigured")) {
+             bool hasStunServer = false;
+             for (const auto &server : _rtcServers) {
+@@ -697,7 +705,7 @@ public:
+         peerConnectionDependencies.allocator = std::move(portAllocator);
+ 
+         webrtc::PeerConnectionInterface::RTCConfiguration peerConnectionConfiguration;
+-        if (_enableP2P) {
++        if (_enableP2P && !_proxy) {
+             peerConnectionConfiguration.type = webrtc::PeerConnectionInterface::IceTransportsType::kAll;
+         } else {
+             peerConnectionConfiguration.type = webrtc::PeerConnectionInterface::IceTransportsType::kRelay;
+@@ -715,7 +723,7 @@ public:
+         const bool allowHostnameIceServers = getCustomParameterBoolDefaultTrue(_customParameters, "network_reference_allow_hostname_ice_servers");
+ 
+         for (auto &server : _rtcServers) {
+-            if (server.isTcp) {
++            if (_proxy ? (!server.isTurn || !server.isTcp) : server.isTcp) {
+                 continue;
+             }
+ 
+@@ -756,7 +764,8 @@ public:
+                 webrtc::PeerConnectionInterface::IceServer mappedServer;
+ 
+                 mappedServer.urls.push_back(
+-                    "turn:" + address.HostAsURIString() + ":" + std::to_string(server.port));
++                    "turn:" + address.HostAsURIString() + ":" + std::to_string(server.port)
++                    + (server.isTcp ? "?transport=tcp" : "?transport=udp"));
+                 mappedServer.username = server.login;
+                 mappedServer.password = server.password;
+ 
+diff --git a/tgcalls/v2/NativeNetworkingImpl.cpp b/tgcalls/v2/NativeNetworkingImpl.cpp
+index b067cf5..1f8c9ba 100644
+--- a/tgcalls/v2/NativeNetworkingImpl.cpp
++++ b/tgcalls/v2/NativeNetworkingImpl.cpp
+@@ -1,4 +1,5 @@
+ #include "v2/NativeNetworkingImpl.h"
++#include "Socks5Proxy.h"
+ 
+ #include "p2p/base/basic_packet_socket_factory.h"
+ #include "p2p/client/basic_port_allocator.h"
+@@ -31,41 +32,6 @@ namespace tgcalls {
+ 
+ namespace {
+ 
+-class CryptStringImpl : public rtc::CryptStringImpl {
+-public:
+-    CryptStringImpl(std::string const &value) :
+-    _value(value) {
+-    }
+-    
+-    virtual ~CryptStringImpl() override {
+-    }
+-    
+-    virtual size_t GetLength() const override {
+-        return _value.size();
+-    }
+-    
+-    virtual void CopyTo(char* dest, bool nullterminate) const override {
+-        memcpy(dest, _value.data(), _value.size());
+-        if (nullterminate) {
+-            dest[_value.size()] = 0;
+-        }
+-    }
+-    virtual std::string UrlEncode() const override {
+-        return _value;
+-    }
+-    virtual CryptStringImpl* Copy() const override {
+-        return new CryptStringImpl(_value);
+-    }
+-    
+-    virtual void CopyRawTo(std::vector<unsigned char>* dest) const override {
+-        dest->resize(_value.size());
+-        memcpy(dest->data(), _value.data(), _value.size());
+-    }
+-    
+-private:
+-    std::string _value;
+-};
+-
+ class WrappedAsyncPacketSocket : public rtc::AsyncPacketSocket {
+ public:
+     WrappedAsyncPacketSocket(std::unique_ptr<rtc::AsyncPacketSocket> &&wrappedSocket) :
+@@ -603,6 +569,11 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
+     
+     _portAllocator->set_step_delay(cricket::kMinimumStepDelay);
+ 
++    if (_proxy) {
++        _portAllocator->set_proxy("t/1.0", Socks5ProxyInfo(*_proxy));
++        _portAllocator->SetCandidateFilter(cricket::CF_RELAY);
++    }
++
+     _portAllocator->set_flags(flags);
+     _portAllocator->Initialize();
+ 
+@@ -610,6 +581,9 @@ void NativeNetworkingImpl::resetDtlsSrtpTransport() {
+     std::vector<cricket::RelayServerConfig> turnServers;
+ 
+     for (auto &server : _rtcServers) {
++        if (_proxy && (!server.isTurn || !server.isTcp)) {
++            continue;
++        }
+         if (server.isTurn) {
+             turnServers.push_back(cricket::RelayServerConfig(
+                 rtc::SocketAddress(server.host, server.port),

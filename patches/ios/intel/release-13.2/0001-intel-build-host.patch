@@ -1,0 +1,42 @@
+From b9c0afb24ae695ac70e4552d9f92dc7e3aac3a71 Mon Sep 17 00:00:00 2001
+From: upsoftt <13884634+upsoftt@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 22:59:38 +0100
+Subject: [PATCH] Use the Intel Bazel and wasi-sdk binaries on macOS x86_64
+
+---
+ MODULE.bazel  | 6 +++---
+ versions.json | 2 +-
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/MODULE.bazel b/MODULE.bazel
+index f8c3cc71..64faf9f3 100644
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -13,9 +13,9 @@ filegroup(
+ 
+ http_archive(
+     name = "wasi_sdk_macos",
+-    urls = ["https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-arm64-macos.tar.gz"],
+-    sha256 = "85c997a2665ead91673b5bb88b7d0df3fc8900df3bfa244f720d478187bbdc78",
+-    strip_prefix = "wasi-sdk-33.0-arm64-macos",
++    urls = ["https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-x86_64-macos.tar.gz"],
++    sha256 = "18f3f201ba9734e6a4455b0b6410690395a55e9ffa9f6f5066f66083a94b93b3",
++    strip_prefix = "wasi-sdk-33.0-x86_64-macos",
+     build_file_content = _WASI_SDK_BUILD,
+ )
+ 
+diff --git a/versions.json b/versions.json
+index 01ad887a..303f0547 100644
+--- a/versions.json
++++ b/versions.json
+@@ -2,6 +2,6 @@
+     "app": "13.2",
+     "xcode": "27.1",
+     "deploy_xcode": "27.1",
+-    "bazel": "9.2.0:dd466352a3e4d3581b8898740ee1ff208866ccbe25f8d367c5dcb950219587e6",
++    "bazel": "9.2.0:14c9bcb01303b38192e0e2895051c1bcf19bf89d7e416f5aeeeb48b6b624cfbf",
+     "macos": "27"
+ }
+-- 
+2.43.0
+

@@ -24,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Tag = 'v7.3.1',
+    [string]$Tag = 'v7.4.6',
     [string]$Root = 'D:\Build\TelegramTeam',
     [string]$InstallPath = 'D:\Apps\TelegramTeam',
     [switch]$Sources,
@@ -54,12 +54,29 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent $scriptRoot
 $sourcePath = Join-Path $Root 'tdesktop'
 $patchPath = Join-Path $projectRoot 'patches\desktop'
+if (Test-Path -LiteralPath (Join-Path $patchPath $Tag)) {
+    $patchPath = Join-Path $patchPath $Tag
+}
 $logPath = Join-Path $Root 'build.log'
+$qtArgument = if ($Tag -eq 'v7.3.3') { ' qt5' } else { '' }
 
 function Write-Step([string]$text) {
     $stamp = Get-Date -Format 'HH:mm:ss'
     Write-Host "[$stamp] $text" -ForegroundColor Cyan
     Add-Content -Path $logPath -Value "[$stamp] $text" -Encoding utf8
+}
+
+function Apply-CallProxyPatch {
+    $directory = Join-Path $sourcePath 'Telegram/ThirdParty/tgcalls'
+    $patch = Join-Path $projectRoot 'patches/tgcalls/0001-socks5-call-routing.patch'
+    if (-not (Test-Path -LiteralPath $patch)) { throw 'Call proxy dependency patch is missing.' }
+    & git -C $directory apply --reverse --check --quiet $patch
+    $alreadyApplied = $LASTEXITCODE -eq 0
+    if ($alreadyApplied) { return }
+    & git -C $directory apply --check $patch
+    if ($LASTEXITCODE -ne 0) { throw 'Call proxy patch does not match the official dependency.' }
+    & git -C $directory apply $patch
+    if ($LASTEXITCODE -ne 0) { throw 'Call proxy patch failed.' }
 }
 
 function Get-VcVarsPath {
@@ -269,12 +286,13 @@ if ($Prepare) {
     # silent = отвечать «пересобрать» самому. Без него скрипт Telegram на любой
     # изменившейся библиотеке задаёт вопрос в консоль и ждёт нажатия клавиши —
     # в фоновом запуске это выглядит как зависшая сборка.
-    Invoke-InBuildEnvironment $Root "`"$sourcePath\Telegram\build\prepare\win.bat`" silent"
+    Invoke-InBuildEnvironment $Root "`"$sourcePath\Telegram\build\prepare\win.bat`" silent$qtArgument"
     Write-Step 'Библиотеки готовы'
 }
 
 if ($Configure) {
-    Repair-QtVulkanLink
+    if ($Tag -eq 'v7.4.6') { Apply-CallProxyPatch }
+    if ($qtArgument) { Repair-QtVulkanLink }
     $credentials = Get-TelegramCredentials
     Write-Step 'Настраиваю проект'
     # Полный путь обязателен: в окружении задана NoDefaultCurrentDirectoryInExePath,
@@ -287,13 +305,30 @@ if ($Configure) {
     # Значение передаётся всегда, и ON, и OFF: CMake помнит его между настройками,
     # и раздаваемая сборка после командной иначе молча унаследовала бы снятый запрет.
     $unlock = if ($UnlockProtected) { 'ON' } else { 'OFF' }
-    Invoke-InBuildEnvironment (Join-Path $sourcePath 'Telegram') `
-        "call `"$configureScript`" x64 -D TDESKTOP_API_ID=$($credentials.ID) -D TDESKTOP_API_HASH=$($credentials.Hash) -D TDESKTOP_API_HASH_SCRAMBLED=$scrambled -D TGTEAM_UNLOCK_PROTECTED=$unlock" `
-        'настройка проекта'
+    $env:TGTEAM_BUILD_API_ID = $credentials.ID
+    $env:TGTEAM_BUILD_API_HASH = $credentials.Hash
+    $env:TGTEAM_BUILD_API_SCRAMBLED = $scrambled
+    $cache = Join-Path $Root 'credentials.cmake'
+    $content = @'
+set(TDESKTOP_API_ID "$ENV{TGTEAM_BUILD_API_ID}" CACHE STRING "" FORCE)
+set(TDESKTOP_API_HASH "$ENV{TGTEAM_BUILD_API_HASH}" CACHE STRING "" FORCE)
+set(TDESKTOP_API_HASH_SCRAMBLED "$ENV{TGTEAM_BUILD_API_SCRAMBLED}" CACHE STRING "" FORCE)
+'@
+    [IO.File]::WriteAllText($cache, $content)
+    try {
+        Invoke-InBuildEnvironment (Join-Path $sourcePath 'Telegram') `
+            "call `"$configureScript`" x64$qtArgument -C `"$cache`" -D TGTEAM_UNLOCK_PROTECTED=$unlock" `
+            'настройка проекта'
+    } finally {
+        Remove-Item -LiteralPath Env:TGTEAM_BUILD_API_ID -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath Env:TGTEAM_BUILD_API_HASH -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath Env:TGTEAM_BUILD_API_SCRAMBLED -ErrorAction SilentlyContinue
+    }
     Write-Step "Проект настроен (запрет копирования снят везде: $unlock)"
 }
 
 if ($Build) {
+    if ($Tag -eq 'v7.4.6') { Apply-CallProxyPatch }
     # По умолчанию MSBuild запускает компилятор на каждое ядро. На двадцати
     # четырёх ядрах это двадцать пять процессов, а каждый под tdesktop берёт
     # три-четыре гигабайта — память кончается, и компилятор падает с C1060

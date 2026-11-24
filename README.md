@@ -43,44 +43,27 @@ Windows-сборка **портативная**: распаковать в лю�
 
 ## На какой версии Telegram это собрано
 
-| Платформа | Версия Telegram | Дата версии | Заметки Telegram |
+| Платформа | Версия исходников | Дата тега | Доступная сборка |
 |---|---|---|---|
-| Windows | Telegram Desktop **7.3.1** | 10 октября 2026 | [заметки к версии](https://github.com/telegramdesktop/tdesktop/releases/tag/v7.3.1) |
-| iPhone | Telegram for iOS **12.9.2** (по общей ссылке раздаётся сборка 5) | 17 июля 2026 | [анонс от 14 июля 2026](https://telegram.org/blog/communities-editor-invisible-messages) |
+| Windows | [Telegram Desktop 7.4.6](https://github.com/telegramdesktop/tdesktop/releases/tag/v7.4.6) | 23 ноября 2026 | [7.3.1](https://github.com/upsoftt/telegram-team/releases/tag/v7.3.1) |
+| iPhone | [Telegram for iOS 13.2](https://github.com/TelegramMessenger/Telegram-iOS/commit/24638bc69bd083981b178dd1e7f921eebbf7fc46) | 2 ноября 2026 | Публичная бета на Telegram 12.9.2 |
 
-Номер сборки здесь совпадает с номером версии Telegram: `TelegramTeam-7.3.1` — это Telegram
-Desktop 7.3.1 плюс двенадцать патчей из `patches/desktop`. Правки лежат отдельными коммитами
-поверх стабильного тега, поэтому переход на новую версию Telegram — это `git merge` нового
-тега, а не перенос изменений руками, и обновления от Telegram не задерживаются.
+В Desktop 7.4.6 появились черновики и публикация историй, HTML-виджеты в изолированном
+процессе, операции с подарками в блокчейне из раздела «Деньги» и предпросмотр историй
+в ботах. В исходниках iOS 13.2 появились нативная среда выполнения виджетов в сообщениях
+и доработки редактора форматированного текста, уведомлений и расширения Siri.
+[Изменения в исходниках iOS 13.2](https://github.com/TelegramMessenger/Telegram-iOS/compare/release-13.1.2...release-13.2)
 
-Патчи iPhone в `patches/ios` уже перенесены на Telegram for iOS 13.0. По общей ссылке
-TestFlight пока раздаётся сборка 5 на 12.9.2; её исходники — патчи `patches/ios` в
-коммите `a956604` этого репозитория.
-
-**Что сам Telegram добавил с 7.1** (Windows, по его заметкам к версиям):
-
-- **7.3** — деньги прямо в клиенте: кошелёк, перевод собеседнику, история переводов,
-  передача и продажа коллекционных подарков, вход в приложения через TON Connect;
-  кошелёк можно закрыть паролем или Windows Hello;
-- **7.2.6–7.2.10** — текст со шрифтами и выравниванием в редакторе картинок, папка или
-  набор файлов отправляются одним архивом, правка GIF перед отправкой, оценка звонка
-  звёздами, свои эмодзи из видеостикеров, эмодзи Unicode 17, отправка оформленного
-  сообщения по Ctrl+Enter, аудио в таком сообщении играют плейлистом;
-- **7.2** — новая система обновлений самого Telegram (в этой сборке автообновления нет).
-
-Сама 7.3.1 поверх этого чинит шифрование кошелька через Windows Hello, цвета дат в
-некоторых темах и не даёт защищённым от копирования файлам попадать в «Загрузки».
-
-**Что Telegram анонсировал в 12.9** (iPhone): редактор оформленного текста для статей и
-длинных постов (таблицы, списки, заголовки, до 32 000 знаков в сообщении), «Сообщества» —
-несколько каналов, групп и ботов одной строкой в списке чатов, ответы ботов, видимые только
-вам, и поиск по 350 миллионам GIF.
+Актуальные патчи лежат в `patches/desktop/v7.4.6`, `patches/tgcalls` и
+`patches/ios/release-13.2`. Вариант для Intel Mac дополнительно использует
+`patches/ios/intel/release-13.2`. Исходники публичной iPhone-беты на 12.9.2 доступны
+в каталоге `patches/ios` коммита `a956604`.
 
 ## Что именно изменено
 
 Подробный разбор — [`docs/changes.md`](docs/changes.md). Коротко:
 
-### Windows (`patches/desktop`, поверх тега `v7.3.1`)
+### Windows (поверх тега `v7.4.6`)
 
 | Файл | Что меняется |
 |---|---|
@@ -96,7 +79,7 @@ TestFlight пока раздаётся сборка 5 на 12.9.2; её исхо
 | `data_peer.*`, `history_item.*`, `api/api_protected_copy.*` и проверки кнопок | администратор канала или группы с запретом копирования может сохранять, копировать и пересылать посты; пересылка идёт копией, потому что сервер защищённую пересылку отклоняет |
 | `window/notifications_manager*`, `platform/win/notifications_manager_win.cpp` | код подтверждения копируется кнопкой прямо из уведомления, чат не открывается |
 
-### iPhone (`patches/ios`, поверх `release-13.0.0`)
+### iPhone (поверх тега `release-13.2`)
 
 | Файл | Что меняется |
 |---|---|
@@ -155,10 +138,15 @@ scripts/mac/run-build.sh <номер сборки>
 компилятора: патчи должны лечь на чистый тег апстрима без единого конфликта.
 
 ```sh
-git clone --depth 1 --branch v7.3.1 https://github.com/telegramdesktop/tdesktop.git
+git clone --depth 1 --branch v7.4.6 https://github.com/telegramdesktop/tdesktop.git
 cd tdesktop
-git am --keep-cr ../telegram-team/patches/desktop/*.patch
-git log --oneline -13     # двенадцать наших коммитов поверх «Version 7.3.1»
+git am --keep-cr ../telegram-team/patches/desktop/v7.4.6/*.patch
+git submodule update --init --depth 1 Telegram/ThirdParty/tgcalls
+git -C Telegram/ThirdParty/tgcalls apply --check "$PWD"/../telegram-team/patches/tgcalls/*.patch
+cd ..
+git clone --depth 1 --branch release-13.2 https://github.com/TelegramMessenger/Telegram-iOS.git
+cd Telegram-iOS
+git am --keep-cr ../telegram-team/patches/ios/release-13.2/*.patch
 ```
 
 Флаг `--keep-cr` обязателен, а `.gitattributes` в этом репозитории помечает `*.patch`
@@ -192,14 +180,9 @@ account limit is raised to 50, a `tgteam://…&account=<user id>` link switches 
 account before opening a chat or message, an admin can forward and save posts from their own
 copy-protected channel, and a confirmation code is copied straight from the notification.
 
-Current base versions: **Telegram Desktop 7.3.1** (released 10 October 2026) for Windows and
-**Telegram for iOS 12.9.2** (17 July 2026) for the public iPhone link — everything Telegram
-shipped in those releases is present here. The iPhone patches are already moved to
-Telegram for iOS 13.0.
-
-All modifications are in `patches/` — about two thousand lines, most of them the
-copy-protected forwarding. No telemetry, no analytics, no auto-update, no third-party fork
-in the base.
+The latest source patches are based on **Telegram Desktop 7.4.6** (23 November
+2026) and **Telegram for iOS 13.2** (2 November 2026). The public Windows download
+is based on 7.3.1, and the public iPhone beta is based on 12.9.2.
 
 Telegram Desktop is GPLv3 (with the OpenSSL exception), Telegram-iOS is GPLv2; both allow
 modification and redistribution provided the modified source is published — which is what
