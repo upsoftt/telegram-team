@@ -4,7 +4,7 @@
 правками. Нужна там, где официальный клиент упирается в два своих ограничения:
 
 1. **Больше аккаунтов.** Официальный клиент держит 3 аккаунта без подписки и 4–6 с ней.
-   Здесь лимит поднят до 50.
+   Здесь можно добавить до 20 аккаунтов на Windows и до 50 на iPhone.
 2. **Открыть нужное сообщение под нужным аккаунтом.** Ссылка вида
    `tgteam://resolve?domain=<чат>&post=<номер>&account=<user id>` сначала переключает
    клиент на указанный аккаунт, потом открывает сообщение. У Telegram такой возможности
@@ -67,7 +67,7 @@ Windows-сборка **портативная**: распаковать в лю�
 
 | Файл | Что меняется |
 |---|---|
-| `main/main_domain.h` | лимит аккаунтов 3/6 → 50 |
+| `main/main_domain.h` | лимит аккаунтов 3/6 → 20 |
 | `core/version.h` | своё имя, имя файла и GUID приложения — отдельный каталог данных |
 | `core/application.cpp` | схемы `tg://`, `tonsite://`, своя `tgteam://` регистрируются при каждом запуске; параметр `account` переключает аккаунт до открытия чата |
 | `core/local_url_handlers.cpp` | текст ответа из ссылки подставляется в поле ввода и в чатах без публичного имени |
@@ -176,9 +176,9 @@ Telegram Desktop распространяется под **GPLv3** (с искл�
 
 An unofficial build of Telegram for Windows and iPhone, made from the original upstream
 sources (`telegramdesktop/tdesktop` and `TelegramMessenger/Telegram-iOS`, stable tags). The
-account limit is raised to 50, a `tgteam://…&account=<user id>` link switches to the given
-account before opening a chat or message, an admin can forward and save posts from their own
-copy-protected channel, and a confirmation code is copied straight from the notification.
+account limit is 20 on Windows and 50 on iPhone. A `tgteam://…&account=<user id>` link switches
+to the given account before opening a chat or message. An admin can forward and save posts from
+their own copy-protected channel. Confirmation codes can be copied from notifications.
 
 The latest source patches are based on **Telegram Desktop 7.4.6** (23 November
 2026) and **Telegram for iOS 13.2** (2 November 2026). The public Windows download
