@@ -1,13 +1,13 @@
-From 64272edb13c86a3e392ebaaffbe9e6ad16d5c570 Mon Sep 17 00:00:00 2001
+From 073d108463f80f584111d50a92934b998d119c30 Mon Sep 17 00:00:00 2001
 From: upsoftt <13884634+upsoftt@users.noreply.github.com>
-Date: Tue, 24 Nov 2026 22:56:43 +0100
+Date: Wed, 25 Nov 2026 02:14:47 +0100
 Subject: [PATCH] Preserve Telegram Team Windows features on 7.4.6
 
 ---
  Telegram/CMakeLists.txt                       |   25 +-
  Telegram/Resources/langs/lang.strings         |    1 +
  Telegram/Resources/winrc/Telegram.rc          |    8 +-
- .../SourceFiles/api/api_protected_copy.cpp    |  820 +++++++++
+ .../SourceFiles/api/api_protected_copy.cpp    |  821 +++++++++
  Telegram/SourceFiles/api/api_protected_copy.h |   31 +
  Telegram/SourceFiles/apiwrap.cpp              |    8 +
  Telegram/SourceFiles/boxes/connection_box.cpp |  102 +-
@@ -70,7 +70,7 @@ Subject: [PATCH] Preserve Telegram Team Windows features on 7.4.6
  .../SourceFiles/window/window_peer_menu.cpp   |   35 +
  .../window/window_session_controller.cpp      |    9 +-
  .../window_session_controller_link_info.h     |    2 +
- 66 files changed, 3687 insertions(+), 145 deletions(-)
+ 66 files changed, 3688 insertions(+), 145 deletions(-)
  create mode 100644 Telegram/SourceFiles/api/api_protected_copy.cpp
  create mode 100644 Telegram/SourceFiles/api/api_protected_copy.h
  create mode 100644 Telegram/SourceFiles/core/teambase_proxy.h
@@ -159,10 +159,10 @@ index 188b5d5813..b881b9786c 100644
      END
 diff --git a/Telegram/SourceFiles/api/api_protected_copy.cpp b/Telegram/SourceFiles/api/api_protected_copy.cpp
 new file mode 100644
-index 0000000000..f8b209f673
+index 0000000000..d0c1f0869e
 --- /dev/null
 +++ b/Telegram/SourceFiles/api/api_protected_copy.cpp
-@@ -0,0 +1,820 @@
+@@ -0,0 +1,821 @@
 +/*
 +This file is part of Telegram Desktop,
 +the official desktop application for the Telegram messaging service.
@@ -853,6 +853,7 @@ index 0000000000..f8b209f673
 +			voice ? voice->waveform : VoiceWaveform(),
 +			first.document->duration(),
 +			(first.kind == PartKind::Round),
++			nullptr, // The downloaded media is already encoded.
 +			_action);
 +		return Sent::Upload;
 +	}
