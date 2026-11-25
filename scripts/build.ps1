@@ -62,8 +62,17 @@ $qtArgument = if ($Tag -eq 'v7.3.3') { ' qt5' } else { '' }
 
 function Write-Step([string]$text) {
     $stamp = Get-Date -Format 'HH:mm:ss'
-    Write-Host "[$stamp] $text" -ForegroundColor Cyan
-    Add-Content -Path $logPath -Value "[$stamp] $text" -Encoding utf8
+    $line = "[$stamp] $text"
+    Write-Host $line -ForegroundColor Cyan
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            [IO.File]::AppendAllText($logPath, $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($true))
+            return
+        } catch [IO.IOException] {
+            if ($attempt -eq 5) { throw }
+            Start-Sleep -Milliseconds 250
+        }
+    }
 }
 
 function Apply-CallProxyPatch {
